@@ -3,28 +3,37 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 from typing import Any
 
 from openai import AsyncOpenAI
 
+from app.agent.tool_registry import ToolDefinition, ToolRegistry
+from app.core.config import settings
+from app.core.context import AgentRequestContext
 from app.agent.system_prompts import SYSTEM_PROMPT
 
-_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+_client: AsyncOpenAI | None = None
 
-# ---------------------------------------------------------------------------
-# Tool schemas (passed to the model as JSON-Schema function definitions)
-# ---------------------------------------------------------------------------
 
-TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "create_calendar_event",
-            "description": (
-                "Creates an event or reminder in the user's Google Calendar."
-            ),
-            "parameters": {
+def _get_client() -> AsyncOpenAI:
+    """Create OpenAI client lazily to avoid import-time failures in tests."""
+    global _client
+    if _client is None:
+        _client = AsyncOpenAI(api_key=settings.openai_api_key)
+    return _client
+
+def _build_registry() -> ToolRegistry:
+    """Register default tools for this assistant."""
+    # Lazy import so tool modules can safely import DB models.
+    from app.tools.calendar_tool import create_calendar_event
+    from app.tools.finance_tool import add_expense
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="create_calendar_event",
+            description="Creates an event or reminder in the user's Google Calendar.",
+            parameters={
                 "type": "object",
                 "properties": {
                     "title": {
@@ -53,14 +62,14 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "required": ["title", "start_datetime"],
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_expense",
-            "description": "Records a new expense in the user's personal wallet.",
-            "parameters": {
+            executor=create_calendar_event,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="add_expense",
+            description="Records a new expense in the user's personal wallet.",
+            parameters={
                 "type": "object",
                 "properties": {
                     "amount": {
@@ -86,15 +95,20 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "required": ["amount"],
             },
-        },
-    },
-]
+            executor=add_expense,
+        )
+    )
+    return registry
+
+
+REGISTRY = _build_registry()
 
 
 async def run_agent(
     user_message: str,
-    telegram_id: int,
+    user_id: int,
     db_session: Any,
+    context: AgentRequestContext | None = None,
 ) -> str:
     """Run the LLM agent for a given user message.
 
@@ -103,18 +117,21 @@ async def run_agent(
 
     Args:
         user_message: Text message from the user.
-        telegram_id:  Telegram user ID (used for tool execution context).
+        user_id:      Internal user ID (used for tool execution context).
         db_session:   SQLAlchemy database session.
+        context:      Optional normalized request context.
 
     Returns:
         Final response string to send back to the user.
     """
-    # Lazy imports to avoid circular dependencies at module load time
-    from app.tools.calendar_tool import create_calendar_event
-    from app.tools.finance_tool import add_expense
-
     now_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     system_content = SYSTEM_PROMPT.format(current_datetime=now_utc)
+    if context:
+        system_content = (
+            f"{system_content}\n"
+            f"Channel: {context.channel}; timezone: {context.timezone}; "
+            f"correlation_id: {context.correlation_id}."
+        )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_content},
@@ -122,10 +139,11 @@ async def run_agent(
     ]
 
     # First LLM call – may return tool calls
-    response = await _client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+    client = _get_client()
+    response = await client.chat.completions.create(
+        model=settings.openai_model,
         messages=messages,
-        tools=TOOLS,
+        tools=REGISTRY.get_openai_schemas(),
         tool_choice="auto",
     )
 
@@ -138,20 +156,16 @@ async def run_agent(
         func_name = tool_call.function.name
         args = json.loads(tool_call.function.arguments)
 
-        if func_name == "create_calendar_event":
-            tool_result = await create_calendar_event(
-                telegram_id=telegram_id,
+        try:
+            tool_result = await REGISTRY.execute(
+                func_name,
+                user_id=user_id,
                 db=db_session,
-                **args,
+                args=args,
             )
-        elif func_name == "add_expense":
-            tool_result = await add_expense(
-                telegram_id=telegram_id,
-                db=db_session,
-                **args,
-            )
-        else:
-            tool_result = {"error": f"Unknown tool: {func_name}"}
+        except Exception as exc:  # pragma: no cover
+            db_session.rollback()
+            tool_result = {"status": "error", "error": str(exc)}
 
         messages.append(
             {
@@ -163,8 +177,8 @@ async def run_agent(
 
     # If there were tool calls, make a second LLM call to get the final answer
     if tool_calls:
-        final_response = await _client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        final_response = await client.chat.completions.create(
+            model=settings.openai_model,
             messages=messages,
         )
         return final_response.choices[0].message.content or ""

@@ -2,19 +2,38 @@
 from __future__ import annotations
 
 import datetime
-import os
 from typing import Any
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.database.models import OAuthToken, User
 
 
-def _get_credentials(telegram_id: int, db: Session) -> Credentials | None:
+def _resolve_user(
+    db: Session,
+    *,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+) -> User | None:
+    """Resolve a user by internal ID or legacy telegram ID."""
+    if user_id is not None:
+        return db.query(User).filter(User.id == user_id).first()
+    if telegram_id is not None:
+        return db.query(User).filter(User.telegram_id == telegram_id).first()
+    return None
+
+
+def _get_credentials(
+    db: Session,
+    *,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+) -> Credentials | None:
     """Retrieve and return Google OAuth2 credentials for a user."""
-    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    user = _resolve_user(db, user_id=user_id, telegram_id=telegram_id)
     if not user or not user.oauth_token:
         return None
 
@@ -23,26 +42,27 @@ def _get_credentials(telegram_id: int, db: Session) -> Credentials | None:
         token=token.access_token,
         refresh_token=token.refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
         scopes=token.scopes.split() if token.scopes else [],
     )
     return creds
 
 
 async def create_calendar_event(
-    telegram_id: int,
     db: Session,
     title: str,
     start_datetime: str,
     end_datetime: str | None = None,
     description: str | None = None,
     location: str | None = None,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
 ) -> dict[str, Any]:
     """Create a Google Calendar event for the given user.
 
     Args:
-        telegram_id:    Telegram user ID.
+        user_id:        Internal user ID.
         db:             Database session.
         title:          Event title/summary.
         start_datetime: ISO 8601 start datetime string.
@@ -53,7 +73,11 @@ async def create_calendar_event(
     Returns:
         Dict with ``status`` and either ``event_link`` or ``error``.
     """
-    creds = _get_credentials(telegram_id, db)
+    creds = _get_credentials(
+        db,
+        user_id=user_id,
+        telegram_id=telegram_id,
+    )
     if not creds:
         return {
             "status": "error",

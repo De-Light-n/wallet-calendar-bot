@@ -1,25 +1,24 @@
 """Entry point: starts FastAPI and mounts the Telegram bot webhook."""
 from __future__ import annotations
 
-import os
-
 from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.bot.handlers import router as bot_router
+from app.channels.routes import router as channels_router
+from app.core.config import settings
 from app.database.session import init_db
-from app.web.routes import router as web_router
 
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Wallet Calendar Bot",
+    title=settings.app_name,
     description="Personal AI assistant for Google Calendar and expense tracking via Telegram.",
-    version="1.0.0",
+    version=settings.app_version,
 )
 
 app.add_middleware(
@@ -29,16 +28,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount web routes (login, OAuth, dashboard, index page)
-app.include_router(web_router)
+app.include_router(channels_router)
 
 # ---------------------------------------------------------------------------
 # Telegram bot setup
 # ---------------------------------------------------------------------------
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_TOKEN = settings.telegram_bot_token
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # e.g. https://yourdomain.com
+WEBHOOK_URL = settings.webhook_url  # e.g. https://yourdomain.com
 
 
 @app.on_event("startup")

@@ -1,11 +1,18 @@
 """Speech-to-Text module using OpenAI Whisper API."""
-import os
 from pathlib import Path
 
-import httpx
 from openai import AsyncOpenAI
 
-_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+from app.core.config import settings
+
+_client: AsyncOpenAI | None = None
+
+
+def _get_client() -> AsyncOpenAI:
+    global _client
+    if _client is None:
+        _client = AsyncOpenAI(api_key=settings.openai_api_key)
+    return _client
 
 
 async def transcribe_audio(file_path: str | Path) -> str:
@@ -18,8 +25,9 @@ async def transcribe_audio(file_path: str | Path) -> str:
         Transcribed text string.
     """
     file_path = Path(file_path)
+    client = _get_client()
     with file_path.open("rb") as audio_file:
-        response = await _client.audio.transcriptions.create(
+        response = await client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
             response_format="text",

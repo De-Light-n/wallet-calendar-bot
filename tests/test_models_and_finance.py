@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.database.models import Expense, OAuthToken, User
+from app.database.models import ChannelAccount, Expense, OAuthToken, User
 from app.database.session import Base
 
 
@@ -76,6 +76,29 @@ def test_create_expense(db_session):
     assert found.category == "food"
 
 
+def test_create_channel_account(db_session):
+    user = User(username="multi")
+    db_session.add(user)
+    db_session.flush()
+
+    account = ChannelAccount(
+        user_id=user.id,
+        channel="telegram",
+        external_user_id="123456",
+        username="multi_user",
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    found = (
+        db_session.query(ChannelAccount)
+        .filter_by(channel="telegram", external_user_id="123456")
+        .first()
+    )
+    assert found is not None
+    assert found.user_id == user.id
+
+
 # ---------------------------------------------------------------------------
 # Finance tool tests
 # ---------------------------------------------------------------------------
@@ -112,6 +135,25 @@ def test_add_expense_success(db_session):
     assert result["amount"] == 200.0
     assert result["currency"] == "UAH"
     assert result["category"] == "food"
+
+
+def test_add_expense_success_with_user_id(db_session):
+    user = User(telegram_id=777888999)
+    db_session.add(user)
+    db_session.commit()
+
+    result = asyncio.run(
+        add_expense(
+            user_id=user.id,
+            db=db_session,
+            amount=99.5,
+            currency="usd",
+            category="other",
+            description="test",
+        )
+    )
+    assert result["status"] == "ok"
+    assert result["currency"] == "USD"
 
 
 def test_get_expenses_success(db_session):

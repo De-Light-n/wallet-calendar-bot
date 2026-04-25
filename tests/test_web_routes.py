@@ -1,4 +1,4 @@
-"""Tests for the FastAPI web routes."""
+"""Tests for multi-channel ingress routes."""
 from __future__ import annotations
 
 import pytest
@@ -7,15 +7,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database.session import Base, get_db
-from app.web.routes import router
-
-# Build a minimal FastAPI app just with the web router so we don't need
-# a Telegram token or running bot
 from fastapi import FastAPI
-from fastapi.templating import Jinja2Templates
 
-test_app = FastAPI()
-test_app.include_router(router)
+import app.channels.routes as channels_routes
+from app.channels.routes import router as channels_router
+
+app_for_tests = FastAPI()
+app_for_tests.include_router(channels_router)
 
 
 @pytest.fixture(scope="module")
@@ -37,50 +35,53 @@ def client(db_engine):
         finally:
             session.close()
 
-    test_app.dependency_overrides[get_db] = override_get_db
-    with TestClient(test_app) as c:
+    app_for_tests.dependency_overrides[get_db] = override_get_db
+    with TestClient(app_for_tests) as c:
         yield c
-    test_app.dependency_overrides.clear()
+    app_for_tests.dependency_overrides.clear()
 
 
-def test_index_page(client):
-    resp = client.get("/")
+def test_slack_webhook_url_verification(client):
+    resp = client.post(
+        "/api/channels/slack/webhook",
+        json={"type": "url_verification", "challenge": "abc123"},
+    )
     assert resp.status_code == 200
-    assert "Wallet Calendar Bot" in resp.text
+    assert resp.json()["challenge"] == "abc123"
 
 
-def test_login_page(client):
-    resp = client.get("/login")
+def test_webchat_message_success(client, monkeypatch):
+    async def _fake_process_user_message(*, db, context, user_message):
+        return f"echo:{user_message}"
+
+    monkeypatch.setattr(channels_routes, "process_user_message", _fake_process_user_message)
+
+    resp = client.post(
+        "/api/channels/webchat/message",
+        json={
+            "external_user_id": "web-1",
+            "text": "buy coffee 100 uah",
+        },
+    )
     assert resp.status_code == 200
-    assert "Google" in resp.text
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["response"].startswith("echo:")
 
 
-def test_auth_google_redirect(client):
-    resp = client.get("/auth/google", follow_redirects=False)
-    assert resp.status_code in (302, 307)
-    location = resp.headers.get("location", "")
-    assert location.startswith("https://accounts.google.com/o/oauth2/")
+def test_discord_webhook_success(client, monkeypatch):
+    async def _fake_process_user_message(*, db, context, user_message):
+        return "ok"
 
+    monkeypatch.setattr(channels_routes, "process_user_message", _fake_process_user_message)
 
-def test_auth_google_with_state(client):
-    resp = client.get("/auth/google?telegram_id=123456", follow_redirects=False)
-    assert resp.status_code in (302, 307)
-    location = resp.headers.get("location", "")
-    assert location.startswith("https://accounts.google.com/")
-    assert "state=123456" in location
-
-
-def test_dashboard_no_user(client):
-    resp = client.get("/dashboard")
+    resp = client.post(
+        "/api/channels/discord/webhook",
+        json={
+            "id": "m1",
+            "content": "remind me tomorrow at 9",
+            "author": {"id": "d-user-1"},
+        },
+    )
     assert resp.status_code == 200
-    assert "Дашборд" in resp.text
-
-
-def test_auth_callback_missing_code(client):
-    resp = client.get("/auth/google/callback")
-    assert resp.status_code == 400
-
-
-def test_auth_callback_with_error(client):
-    resp = client.get("/auth/google/callback?error=access_denied")
-    assert resp.status_code == 400
+    assert resp.json()["status"] == "ok"

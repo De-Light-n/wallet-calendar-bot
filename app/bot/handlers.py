@@ -1,34 +1,32 @@
 """Telegram bot message handlers."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
-from app.agent.llm_client import run_agent
+from app.agent.orchestrator import get_or_create_user_for_channel, process_user_message
 from app.agent.stt import transcribe_audio
 from app.bot.utils import download_telegram_file
-from app.database.models import User
+from app.core.config import settings
+from app.core.context import AgentRequestContext
 from app.database.session import SessionLocal
 
 router = Router()
 
 
 def _get_or_create_user(telegram_id: int, username: str | None, full_name: str | None) -> None:
-    """Ensure the user exists in the database."""
+    """Ensure the user exists in the database and is linked to Telegram."""
     with SessionLocal() as db:
-        user = db.query(User).filter(User.telegram_id == telegram_id).first()
-        if not user:
-            user = User(
-                telegram_id=telegram_id,
-                username=username,
-                full_name=full_name,
-            )
-            db.add(user)
-            db.commit()
+        get_or_create_user_for_channel(
+            db,
+            channel="telegram",
+            external_user_id=str(telegram_id),
+            username=username,
+            full_name=full_name,
+        )
 
 
 @router.message(CommandStart())
@@ -40,7 +38,7 @@ async def handle_start(message: Message) -> None:
 
     _get_or_create_user(telegram_id, username, full_name)
 
-    web_app_url = os.getenv("WEB_APP_URL", "http://localhost:8000")
+    web_app_url = settings.web_app_url
     await message.answer(
         f"👋 Привіт, {full_name or username or 'друже'}!\n\n"
         "Я твій персональний асистент. Ось що я вмію:\n"
@@ -48,7 +46,7 @@ async def handle_start(message: Message) -> None:
         "💰 Записувати витрати до твого гаманця\n\n"
         "Просто напиши мені або надішли голосове повідомлення — "
         "я зрозумію і зроблю потрібну дію!\n\n"
-        f"🔑 Для підключення Google Calendar: {web_app_url}/login",
+        f"🔑 Для підключення Google Calendar: {web_app_url}",
     )
 
 
@@ -64,10 +62,15 @@ async def handle_text(message: Message) -> None:
     await message.answer("⏳ Обробляю твій запит…")
 
     with SessionLocal() as db:
-        response = await run_agent(
+        context = AgentRequestContext(
+            channel="telegram",
+            external_user_id=str(telegram_id),
+            message_id=str(message.message_id),
+        )
+        response = await process_user_message(
+            db=db,
+            context=context,
             user_message=message.text,
-            telegram_id=telegram_id,
-            db_session=db,
         )
 
     await message.answer(response)
@@ -95,10 +98,15 @@ async def handle_voice(message: Message) -> None:
         await message.answer(f'🗒️ Розпізнано: "{text}"\n\n⏳ Обробляю…')
 
         with SessionLocal() as db:
-            response = await run_agent(
+            context = AgentRequestContext(
+                channel="telegram",
+                external_user_id=str(telegram_id),
+                message_id=str(message.message_id),
+            )
+            response = await process_user_message(
+                db=db,
+                context=context,
                 user_message=text,
-                telegram_id=telegram_id,
-                db_session=db,
             )
 
         await message.answer(response)
