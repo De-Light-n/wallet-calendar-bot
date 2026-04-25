@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Дашборд – Wallet Calendar Bot</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f4f8; color: #333; min-height: 100vh; display: flex; flex-direction: column; }
+    header { background: #4a90d9; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; }
+    header a { color: #fff; text-decoration: none; font-size: 1.2rem; font-weight: 700; }
+    main { flex: 1; max-width: 900px; margin: 2rem auto; padding: 0 1rem; width: 100%; }
+    .welcome { background: #fff; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .welcome h2 { color: #2c3e50; margin-bottom: 0.25rem; }
+    .welcome p { color: #666; font-size: 0.95rem; }
+    .success-badge { display: inline-flex; align-items: center; gap: 0.5rem; background: #e6f4ea; color: #27ae60; border-radius: 20px; padding: 0.4rem 1rem; font-size: 0.9rem; font-weight: 600; margin-top: 0.75rem; }
+    .section-title { font-size: 1.2rem; font-weight: 700; color: #2c3e50; margin-bottom: 1rem; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    th { background: #4a90d9; color: #fff; padding: 0.75rem 1rem; text-align: left; font-size: 0.9rem; }
+    td { padding: 0.7rem 1rem; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #f9fbff; }
+    .empty { text-align: center; padding: 2rem; color: #aaa; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.78rem; font-weight: 600; background: #eef2ff; color: #4a90d9; }
+    footer { text-align: center; padding: 1rem; color: #aaa; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">🤖 Wallet Calendar Bot</a>
+    {% if user_email %}<span style="font-size:0.9rem;">{{ user_email }}</span>{% endif %}
+  </header>
+
+  <main>
+    <div class="welcome">
+      {% if user_name %}
+        <h2>Вітаємо, {{ user_name }}! 🎉</h2>
+        <p>Твій обліковий запис Google успішно підключено.</p>
+        <div class="success-badge">✅ Google Calendar підключено</div>
+      {% else %}
+        <h2>Дашборд 📊</h2>
+        <p>Тут відображаються твої останні витрати.</p>
+      {% endif %}
+    </div>
+
+    <p class="section-title">💰 Останні витрати</p>
+
+    {% if expenses %}
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Сума</th>
+          <th>Категорія</th>
+          <th>Опис</th>
+          <th>Дата</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for exp in expenses %}
+        <tr>
+          <td>{{ exp.id }}</td>
+          <td><strong>{{ exp.amount }} {{ exp.currency }}</strong></td>
+          <td><span class="badge">{{ exp.category }}</span></td>
+          <td>{{ exp.description or '—' }}</td>
+          <td>{{ exp.created_at.strftime('%d.%m.%Y %H:%M') if exp.created_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      <p>Витрати ще не записані.</p>
+      <p>Надішли боту повідомлення на кшталт: <em>"Записати 150 грн за каву"</em></p>
+    </div>
+    {% endif %}
+  </main>
+
+  <footer>© 2024 Wallet Calendar Bot</footer>
+</body>
+</html>
