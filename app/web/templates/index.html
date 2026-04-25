@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wallet Calendar Bot</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f4f8; color: #333; }
+    header { background: #4a90d9; color: #fff; padding: 1.5rem 2rem; display: flex; align-items: center; gap: 1rem; }
+    header h1 { font-size: 1.6rem; }
+    main { max-width: 800px; margin: 3rem auto; padding: 0 1rem; }
+    .hero { text-align: center; margin-bottom: 3rem; }
+    .hero h2 { font-size: 2rem; margin-bottom: 1rem; color: #2c3e50; }
+    .hero p { font-size: 1.1rem; color: #555; max-width: 600px; margin: 0 auto 2rem; }
+    .btn { display: inline-block; padding: 0.85rem 2rem; border-radius: 8px; font-size: 1rem; text-decoration: none; font-weight: 600; transition: background 0.2s; }
+    .btn-primary { background: #4a90d9; color: #fff; }
+    .btn-primary:hover { background: #357abd; }
+    .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.5rem; margin-top: 2rem; }
+    .feature-card { background: #fff; border-radius: 12px; padding: 1.5rem; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .feature-card .icon { font-size: 2rem; margin-bottom: 0.75rem; }
+    .feature-card h3 { font-size: 1rem; margin-bottom: 0.5rem; color: #2c3e50; }
+    .feature-card p { font-size: 0.9rem; color: #666; }
+    footer { text-align: center; padding: 2rem; color: #888; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <span style="font-size:1.8rem;">🤖</span>
+    <h1>Wallet Calendar Bot</h1>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h2>Твій персональний асистент</h2>
+      <p>Керуй подіями в Google Calendar і відстежуй витрати прямо з Telegram — текстом або голосом.</p>
+      <a href="/login" class="btn btn-primary">Підключитися 🚀</a>
+    </section>
+
+    <div class="features">
+      <div class="feature-card">
+        <div class="icon">📅</div>
+        <h3>Google Calendar</h3>
+        <p>Додавай зустрічі та нагадування одним повідомленням у Telegram.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">💰</div>
+        <h3>Гаманець витрат</h3>
+        <p>Записуй витрати голосом або текстом. Категорії визначаються автоматично.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">🎙️</div>
+        <h3>Голосові команди</h3>
+        <p>Розпізнавання мови за допомогою OpenAI Whisper — просто запиши голосове.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon">🧠</div>
+        <h3>AI-агент</h3>
+        <p>GPT-4o розуміє контекст і виконує кілька дій одночасно з одного повідомлення.</p>
+      </div>
+    </div>
+  </main>
+
+  <footer>© 2024 Wallet Calendar Bot</footer>
+</body>
+</html>
