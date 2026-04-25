@@ -113,7 +113,7 @@ async def run_agent(
     from app.tools.calendar_tool import create_calendar_event
     from app.tools.finance_tool import add_expense
 
-    now_utc = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    now_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     system_content = SYSTEM_PROMPT.format(current_datetime=now_utc)
 
     messages: list[dict[str, Any]] = [

@@ -59,13 +59,14 @@ def test_auth_google_redirect(client):
     resp = client.get("/auth/google", follow_redirects=False)
     assert resp.status_code in (302, 307)
     location = resp.headers.get("location", "")
-    assert "accounts.google.com" in location
+    assert location.startswith("https://accounts.google.com/o/oauth2/")
 
 
 def test_auth_google_with_state(client):
     resp = client.get("/auth/google?telegram_id=123456", follow_redirects=False)
     assert resp.status_code in (302, 307)
     location = resp.headers.get("location", "")
+    assert location.startswith("https://accounts.google.com/")
     assert "state=123456" in location
 
 
