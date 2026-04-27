@@ -155,30 +155,43 @@ def _get_client() -> AsyncOpenAI:
 def _build_registry() -> ToolRegistry:
     """Register default tools for this assistant."""
     # Lazy import so tool modules can safely import DB models.
-    from app.tools.calendar_tool import create_calendar_event
+    from app.tools.calendar_tool import create_calendar_event, list_upcoming_events
     from app.tools.finance_tool import record_transaction
 
     registry = ToolRegistry()
     registry.register(
         ToolDefinition(
             name="create_calendar_event",
-            description="Creates an event or reminder in the user's Google Calendar.",
+            description=(
+                "Creates an event or reminder in the user's Google Calendar. "
+                "Supports both timed events (with start/end time in user's timezone) "
+                "and all-day events (start/end as YYYY-MM-DD)."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "Title / summary of the event.",
+                        "description": "Concise event title / summary.",
                     },
                     "start_datetime": {
                         "type": "string",
-                        "description": "Start date and time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS).",
+                        "description": (
+                            "Start. Use 'YYYY-MM-DDTHH:MM:SS' for timed events "
+                            "(in the user's local timezone) or 'YYYY-MM-DD' for "
+                            "all-day events (birthdays, deadlines, holidays)."
+                        ),
                     },
                     "end_datetime": {
                         "type": "string",
                         "description": (
-                            "End date and time in ISO 8601 format. "
-                            "If not specified by the user, defaults to 1 hour after start."
+                            "End time, REQUIRED. Estimate based on event type when "
+                            "the user did not state it explicitly: meetings ~1h, "
+                            "lunch ~1.5h, cinema/concert ~2.5h, sports ~1h, brief "
+                            "reminders ~15-30min. Must use the same format as "
+                            "start_datetime (timed → timed, all-day → all-day; for "
+                            "all-day events the end day is exclusive — for a single "
+                            "day event use the next calendar day)."
                         ),
                     },
                     "description": {
@@ -190,9 +203,52 @@ def _build_registry() -> ToolRegistry:
                         "description": "Optional location of the event.",
                     },
                 },
-                "required": ["title", "start_datetime"],
+                "required": ["title", "start_datetime", "end_datetime"],
             },
             executor=create_calendar_event,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="list_upcoming_events",
+            description=(
+                "Lists upcoming events from the user's Google Calendar. Use this "
+                "when the user asks what's on their schedule, when an existing "
+                "event is, or to find an event by title before referencing it."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of events to return (1-50).",
+                        "default": 10,
+                    },
+                    "time_min": {
+                        "type": "string",
+                        "description": (
+                            "ISO 8601 lower bound (inclusive). Use 'YYYY-MM-DD' or "
+                            "'YYYY-MM-DDTHH:MM:SS'. Defaults to 'now' if omitted."
+                        ),
+                    },
+                    "time_max": {
+                        "type": "string",
+                        "description": (
+                            "ISO 8601 upper bound. Use 'YYYY-MM-DD' or "
+                            "'YYYY-MM-DDTHH:MM:SS'. Omit for no upper bound."
+                        ),
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Free-text search across event title, description, "
+                            "and location. Use to locate a specific event."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+            executor=list_upcoming_events,
         )
     )
     registry.register(

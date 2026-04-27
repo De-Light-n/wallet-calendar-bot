@@ -135,3 +135,59 @@ else:
 4. PR4: backfill-скрипт.
 
 ---
+
+## 2. Update / Delete подій у календарі
+
+### Що хочемо
+
+- `update_event` — перенести час, перейменувати, поміняти локацію без переходу в Google Calendar UI.
+- `delete_event` — відмінити подію.
+
+### Чому це окремий пункт, а не зразу
+
+LLM має **знайти подію** перед update/delete. Зараз `list_upcoming_events` уже зареєстрований як tool, тому це базово можливо: LLM спочатку викликає list, отримує `event_id`, потім update/delete. Але є нюанси по UX і ризику.
+
+### Дизайн
+
+#### `update_event(event_id, **fields)`
+
+Параметри: `event_id` (обов'язковий, отриманий з `list_upcoming_events`) + ті ж поля, що і в `create_calendar_event`, але всі опціональні. Patch-семантика — оновлюються тільки передані поля.
+
+API: `service.events().patch(calendarId="primary", eventId=event_id, body={...})`. Повертає оновлений event.
+
+LLM workflow для "перенеси зустріч з Сашею на 16:00":
+1. `list_upcoming_events(query="Саша", time_min=today)` → отримує список
+2. Якщо знайдено 1 → `update_event(event_id=..., start_datetime="...", end_datetime="...")`.
+3. Якщо знайдено кілька → відповідь юзеру з вибором.
+4. Якщо нічого → відповідь "не знайшов".
+
+**Ризик низький:** помилка в update легко виправляється новим повідомленням; Google зберігає історію змін.
+
+#### `delete_event(event_id)`
+
+API: `service.events().delete(calendarId="primary", eventId=event_id)` → подія йде в **Trash** Google Calendar (30 днів автовідновлення). Це рятує від випадкового видалення.
+
+**Ризики:**
+- Голосові повідомлення через Whisper можуть розпізнати "віддали" як "видали" → випадкове видалення.
+- LLM може знайти не ту подію при кількох схожих.
+- Юзер не одразу побачить що подія в trash.
+
+**Mitigation:**
+- Soft-confirmation flow: бот відповідає "Підтверди: видалити подію 'X' на завтра о 14:00? Напиши 'так' або 'ні'." Тільки на "так" — реальний виклик API.
+- Це додає **stateful conversation** — треба зберігати "очікую підтвердження видалення event_id=X" між повідомленнями. Складніше імплементувати.
+- Альтернатива: покладатися на 30-денний trash + лог в Telegram — юзер бачить "Видалив подію X. Якщо помилково — `/restore_event` за 30 днів".
+
+### Етапи
+
+1. **PR1: `update_event`** — як новий tool. Без stateful confirmation. Тестувати що patch правильно ставить `timeZone` (так само як create).
+2. **PR2: `delete_event` без confirmation** + повідомлення з event_id для відновлення. Trash-fallback зробить ризик прийнятним.
+3. **(опц.) PR3: stateful confirmation** для delete — якщо стане ясно що випадкові видалення трапляються.
+4. **(опц.) PR4: `restore_event(event_id)`** — повертає з trash. API: `events.get` з `?showDeleted=true` + `events.update` з `status="confirmed"`.
+
+### Що сильно полегшує
+
+- `list_upcoming_events` вже tool — LLM може шукати події по `query`/`time_min`/`time_max`.
+- `execute_with_retry` обгортає всі Calendar виклики — мережевих помилок не боїмось.
+- Логування кожного tool-виклику в `llm_client.py` — буде видно "LLM запросив delete event_id=X" в логах при post-mortem.
+
+---

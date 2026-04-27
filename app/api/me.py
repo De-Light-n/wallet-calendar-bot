@@ -64,8 +64,8 @@ async def get_upcoming_events(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    items = await list_upcoming_events(db, user_id=user.id, limit=limit)
-    return {"items": items}
+    result = await list_upcoming_events(db, user_id=user.id, limit=limit)
+    return {"items": result.get("events", [])}
 
 
 @router.put("/me/timezone")
