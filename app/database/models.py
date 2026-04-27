@@ -30,6 +30,10 @@ class User(Base):
     telegram_id = Column(BigInteger, unique=True, index=True, nullable=True)
     username = Column(String(64), nullable=True)
     full_name = Column(String(128), nullable=True)
+    email = Column(String(255), unique=True, index=True, nullable=True)
+    picture_url = Column(Text, nullable=True)
+    timezone = Column(String(64), nullable=False, default="UTC", server_default="UTC")
+    google_spreadsheet_id = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     oauth_token = relationship("OAuthToken", back_populates="user", uselist=False)
@@ -85,3 +89,20 @@ class Expense(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     user = relationship("User", back_populates="expenses")
+
+
+class LinkCode(Base):
+    """Short-lived code used to attach a messaging channel to a registered user."""
+
+    __tablename__ = "link_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(16), unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    used_by_channel = Column(String(32), nullable=True)
+    used_by_external_id = Column(String(255), nullable=True)
+
+    user = relationship("User")

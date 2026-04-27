@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -10,6 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.database.models import OAuthToken, User
+from app.tools.google_utils import execute_with_retry
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_user(
@@ -34,11 +38,30 @@ def _get_credentials(
 ) -> Credentials | None:
     """Retrieve and return Google OAuth2 credentials for a user."""
     user = _resolve_user(db, user_id=user_id, telegram_id=telegram_id)
-    if not user or not user.oauth_token:
+    if not user:
+        logger.warning(
+            "Calendar credentials unavailable: user not found "
+            "(user_id=%s, telegram_id=%s)",
+            user_id,
+            telegram_id,
+        )
+        return None
+    if not user.oauth_token:
+        logger.warning(
+            "Calendar credentials unavailable: user id=%s has no OAuth token "
+            "(Google account not connected)",
+            user.id,
+        )
         return None
 
     token: OAuthToken = user.oauth_token
-    creds = Credentials(
+    logger.info(
+        "Built Google Calendar credentials for user id=%s (scopes=%s, has_refresh_token=%s)",
+        user.id,
+        token.scopes,
+        bool(token.refresh_token),
+    )
+    return Credentials(
         token=token.access_token,
         refresh_token=token.refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
@@ -46,7 +69,6 @@ def _get_credentials(
         client_secret=settings.google_client_secret,
         scopes=token.scopes.split() if token.scopes else [],
     )
-    return creds
 
 
 async def create_calendar_event(
@@ -73,6 +95,18 @@ async def create_calendar_event(
     Returns:
         Dict with ``status`` and either ``event_link`` or ``error``.
     """
+    logger.info(
+        "create_calendar_event called | user_id=%s telegram_id=%s title=%r "
+        "start=%s end=%s has_description=%s has_location=%s",
+        user_id,
+        telegram_id,
+        title,
+        start_datetime,
+        end_datetime,
+        bool(description),
+        bool(location),
+    )
+
     creds = _get_credentials(
         db,
         user_id=user_id,
@@ -91,12 +125,23 @@ async def create_calendar_event(
     try:
         start_dt = datetime.datetime.fromisoformat(start_datetime)
     except ValueError:
+        logger.warning(
+            "create_calendar_event: invalid start_datetime=%r (user_id=%s)",
+            start_datetime,
+            user_id,
+        )
         return {"status": "error", "error": f"Invalid start_datetime: {start_datetime}"}
 
     if end_datetime:
         try:
             end_dt = datetime.datetime.fromisoformat(end_datetime)
         except ValueError:
+            logger.warning(
+                "create_calendar_event: invalid end_datetime=%r — defaulting to start+1h "
+                "(user_id=%s)",
+                end_datetime,
+                user_id,
+            )
             end_dt = start_dt + datetime.timedelta(hours=1)
     else:
         end_dt = start_dt + datetime.timedelta(hours=1)
@@ -112,17 +157,89 @@ async def create_calendar_event(
     if location:
         event_body["location"] = location
 
+    logger.info(
+        "Inserting Calendar event for user_id=%s: summary=%r start=%s end=%s tz=%s",
+        user_id,
+        title,
+        start_dt.isoformat(),
+        end_dt.isoformat(),
+        time_zone,
+    )
+
     try:
-        service = build("calendar", "v3", credentials=creds)
-        created_event = (
-            service.events()
-            .insert(calendarId="primary", body=event_body)
-            .execute()
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        created_event = execute_with_retry(
+            service.events().insert(calendarId="primary", body=event_body),
+            label="calendar.events.insert",
+        )
+        event_id = created_event.get("id", "")
+        event_link = created_event.get("htmlLink", "")
+        logger.info(
+            "Calendar event created OK | user_id=%s event_id=%s link=%s",
+            user_id,
+            event_id,
+            event_link,
         )
         return {
             "status": "ok",
-            "event_link": created_event.get("htmlLink", ""),
-            "event_id": created_event.get("id", ""),
+            "event_link": event_link,
+            "event_id": event_id,
         }
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
+        logger.exception(
+            "Calendar insert failed for user_id=%s title=%r: %s",
+            user_id,
+            title,
+            exc,
+        )
         return {"status": "error", "error": str(exc)}
+
+
+async def list_upcoming_events(
+    db: Session,
+    *,
+    user_id: int,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return up to ``limit`` upcoming events for the user. Empty list if Google not connected."""
+    creds = _get_credentials(db, user_id=user_id)
+    if not creds:
+        return []
+
+    now_utc = datetime.datetime.now(datetime.UTC).isoformat()
+    try:
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        result = execute_with_retry(
+            service.events().list(
+                calendarId="primary",
+                timeMin=now_utc,
+                maxResults=limit,
+                singleEvents=True,
+                orderBy="startTime",
+            ),
+            label="calendar.events.list",
+        )
+    except Exception as exc:
+        logger.exception(
+            "list_upcoming_events failed for user_id=%s: %s",
+            user_id,
+            exc,
+        )
+        return []
+
+    events: list[dict[str, Any]] = []
+    for ev in result.get("items", []):
+        start = ev.get("start", {})
+        end = ev.get("end", {})
+        events.append(
+            {
+                "id": ev.get("id"),
+                "title": ev.get("summary", ""),
+                "start": start.get("dateTime") or start.get("date"),
+                "end": end.get("dateTime") or end.get("date"),
+                "location": ev.get("location"),
+                "description": ev.get("description"),
+                "html_link": ev.get("htmlLink"),
+            }
+        )
+    return events

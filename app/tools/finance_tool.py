@@ -1,13 +1,38 @@
-"""Finance tool – records expense entries for a user."""
+"""Finance tool – records transactions to a per-user Google Sheets ledger."""
 from __future__ import annotations
 
 import datetime
-import os
+import logging
 from typing import Any
 
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
 
-from app.database.models import Expense, User
+from app.core.config import settings
+from app.database.models import OAuthToken, User
+from app.tools.google_utils import execute_with_retry, is_spreadsheet_missing
+
+logger = logging.getLogger(__name__)
+
+ALLOWED_TRANSACTION_TYPES = {"expense": "Expense", "income": "Income"}
+
+ALLOWED_CATEGORIES: dict[str, set[str]] = {
+    "Expense": {
+        "Food & Dining",
+        "Transportation",
+        "Groceries",
+        "Entertainment",
+        "Health",
+        "Shopping",
+        "Other",
+    },
+    "Income": {
+        "Salary",
+        "Freelance",
+        "Gifts",
+    },
+}
 
 
 def _resolve_user(
@@ -24,96 +49,896 @@ def _resolve_user(
     return None
 
 
+def _get_google_credentials(
+    db: Session,
+    *,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+) -> Credentials | None:
+    """Build OAuth credentials for Google APIs using the stored user token."""
+    user = _resolve_user(db, user_id=user_id, telegram_id=telegram_id)
+    if not user:
+        logger.warning(
+            "Google credentials unavailable: user not found (user_id=%s, telegram_id=%s)",
+            user_id,
+            telegram_id,
+        )
+        return None
+    if not user.oauth_token:
+        logger.warning(
+            "Google credentials unavailable: user id=%s has no OAuth token (not connected)",
+            user.id,
+        )
+        return None
+
+    token: OAuthToken = user.oauth_token
+    logger.info(
+        "Built Google credentials for user id=%s (scopes=%s, has_refresh_token=%s)",
+        user.id,
+        token.scopes,
+        bool(token.refresh_token),
+    )
+    return Credentials(
+        token=token.access_token,
+        refresh_token=token.refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+        scopes=token.scopes.split() if token.scopes else [],
+    )
+
+
+def _normalize_transaction_type(transaction_type: str) -> str | None:
+    return ALLOWED_TRANSACTION_TYPES.get(transaction_type.strip().lower())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Spreadsheet provisioning (built from scratch, no Drive copy required)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_SHEET_DASHBOARD = "Dashboard"
+_SHEET_TRANSACTIONS = "Transactions"
+_SHEET_MONTHLY = "Monthly"
+_SHEET_CATEGORIES = "Categories"
+
+_TRANSACTIONS_HEADER = [
+    "Date", "Time", "Type", "Amount", "Currency", "Category", "Description",
+]
+
+
+def _spreadsheet_url(spreadsheet_id: str) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+
+
+def _build_spreadsheet_create_body(user: User) -> dict[str, Any]:
+    """Define a fresh spreadsheet with Dashboard + Transactions + Monthly + Categories."""
+    user_tz = getattr(user, "timezone", None) or "Europe/Kyiv"
+
+    def _sheet(
+        title: str,
+        *,
+        index: int,
+        rows: int,
+        cols: int,
+        color: tuple[float, float, float],
+    ) -> dict[str, Any]:
+        r, g, b = color
+        return {
+            "properties": {
+                "title": title,
+                "index": index,
+                "gridProperties": {
+                    "rowCount": rows,
+                    "columnCount": cols,
+                    "frozenRowCount": 1,
+                },
+                "tabColor": {"red": r, "green": g, "blue": b},
+            }
+        }
+
+    return {
+        "properties": {
+            "title": f"Wallet Ledger - user-{user.id}",
+            "locale": "uk_UA",
+            "timeZone": user_tz,
+        },
+        "sheets": [
+            _sheet(_SHEET_DASHBOARD, index=0, rows=60, cols=12, color=(0.26, 0.52, 0.96)),
+            _sheet(_SHEET_TRANSACTIONS, index=1, rows=1000, cols=7, color=(0.18, 0.80, 0.44)),
+            _sheet(_SHEET_MONTHLY, index=2, rows=20, cols=5, color=(0.96, 0.65, 0.14)),
+            _sheet(_SHEET_CATEGORIES, index=3, rows=50, cols=5, color=(0.91, 0.26, 0.21)),
+        ],
+    }
+
+
+def _dashboard_values() -> list[list[str]]:
+    """Return rows for the Dashboard sheet (current-month + all-time metrics).
+
+    Formulas use ';' as argument separator to match the spreadsheet's uk_UA locale.
+    """
+    cm_start = "DATE(YEAR(TODAY());MONTH(TODAY());1)"
+    cm_end = "EOMONTH(TODAY();0)"
+
+    sumifs_cm = (
+        '=SUMIFS(Transactions!D:D;Transactions!C:C;"{ttype}";'
+        f'Transactions!A:A;">="&{cm_start};Transactions!A:A;"<="&{cm_end})'
+    )
+    countifs_cm = (
+        f'=COUNTIFS(Transactions!A:A;">="&{cm_start};'
+        f'Transactions!A:A;"<="&{cm_end})'
+    )
+
+    return [
+        ["💰 Wallet Dashboard"],                                        # 1
+        [""],                                                           # 2
+        ["📊 Поточний місяць"],                                          # 3
+        ["Метрика", "Сума"],                                            # 4
+        ["Витрати", sumifs_cm.format(ttype="Expense")],                 # 5
+        ["Доходи", sumifs_cm.format(ttype="Income")],                   # 6
+        ["Баланс", "=B6-B5"],                                           # 7
+        ["Кількість транзакцій", countifs_cm],                          # 8
+        [""],                                                           # 9
+        ["📈 За весь час"],                                              # 10
+        ["Метрика", "Сума"],                                            # 11
+        ["Витрати всього", '=SUMIF(Transactions!C:C;"Expense";Transactions!D:D)'],
+        ["Доходи всього", '=SUMIF(Transactions!C:C;"Income";Transactions!D:D)'],
+        ["Баланс всього", "=B13-B12"],                                  # 14
+        ["Транзакцій всього", "=MAX(0;COUNTA(Transactions!A:A)-1)"],    # 15
+    ]
+
+
+def _monthly_values(months: int = 12) -> list[list[str]]:
+    """Rows for the Monthly sheet, ordered oldest→newest so charts read left-to-right."""
+    rows: list[list[str]] = [["Місяць", "Витрати", "Доходи", "Баланс", "Кількість"]]
+    # offset goes from (months-1) months ago down to 0 (current month)
+    for sheet_row, offset in enumerate(range(months - 1, -1, -1), start=2):
+        month_label = f'=TEXT(EOMONTH(TODAY();{-offset});"YYYY-MM")'
+        start = f"(EOMONTH(TODAY();{-offset - 1})+1)"
+        end = f"EOMONTH(TODAY();{-offset})"
+        expense = (
+            f'=SUMIFS(Transactions!D:D;Transactions!C:C;"Expense";'
+            f'Transactions!A:A;">="&{start};Transactions!A:A;"<="&{end})'
+        )
+        income = (
+            f'=SUMIFS(Transactions!D:D;Transactions!C:C;"Income";'
+            f'Transactions!A:A;">="&{start};Transactions!A:A;"<="&{end})'
+        )
+        balance = f"=C{sheet_row}-B{sheet_row}"
+        count = (
+            f'=COUNTIFS(Transactions!A:A;">="&{start};'
+            f'Transactions!A:A;"<="&{end})'
+        )
+        rows.append([month_label, expense, income, balance, count])
+    return rows
+
+
+def _categories_values() -> list[list[str]]:
+    """Return rows for the Categories sheet (all-time totals per category)."""
+    rows: list[list[str]] = [["Категорія", "Тип", "Сума", "Кількість", "Середня"]]
+    sheet_row = 2
+    for tx_type in ("Expense", "Income"):
+        for cat in sorted(ALLOWED_CATEGORIES[tx_type]):
+            sum_f = (
+                f'=SUMIFS(Transactions!D:D;'
+                f'Transactions!C:C;"{tx_type}";'
+                f'Transactions!F:F;"{cat}")'
+            )
+            count_f = (
+                f'=COUNTIFS(Transactions!C:C;"{tx_type}";'
+                f'Transactions!F:F;"{cat}")'
+            )
+            avg_f = f"=IFERROR(C{sheet_row}/D{sheet_row};0)"
+            rows.append([cat, tx_type, sum_f, count_f, avg_f])
+            sheet_row += 1
+    return rows
+
+
+def _format_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
+    """Build batchUpdate requests for cosmetic formatting across all sheets."""
+    primary = {"red": 0.26, "green": 0.52, "blue": 0.96}
+    header_bg = {"red": 0.85, "green": 0.92, "blue": 0.97}
+    white = {"red": 1.0, "green": 1.0, "blue": 1.0}
+    currency_fmt = {"type": "NUMBER", "pattern": "#,##0.00"}
+
+    dashboard_id = sheet_ids[_SHEET_DASHBOARD]
+    transactions_id = sheet_ids[_SHEET_TRANSACTIONS]
+    monthly_id = sheet_ids[_SHEET_MONTHLY]
+    categories_id = sheet_ids[_SHEET_CATEGORIES]
+
+    def _range(sheet_id: int, r0: int, r1: int, c0: int, c1: int) -> dict[str, Any]:
+        return {
+            "sheetId": sheet_id,
+            "startRowIndex": r0,
+            "endRowIndex": r1,
+            "startColumnIndex": c0,
+            "endColumnIndex": c1,
+        }
+
+    def _repeat(rng: dict[str, Any], fmt: dict[str, Any], fields: str) -> dict[str, Any]:
+        return {
+            "repeatCell": {
+                "range": rng,
+                "cell": {"userEnteredFormat": fmt},
+                "fields": f"userEnteredFormat({fields})",
+            }
+        }
+
+    def _table_header(sheet_id: int, cols: int) -> dict[str, Any]:
+        return _repeat(
+            _range(sheet_id, 0, 1, 0, cols),
+            {
+                "backgroundColor": primary,
+                "horizontalAlignment": "CENTER",
+                "textFormat": {"foregroundColor": white, "bold": True},
+            },
+            "backgroundColor,horizontalAlignment,textFormat",
+        )
+
+    def _currency_col(sheet_id: int, col: int) -> dict[str, Any]:
+        return _repeat(
+            _range(sheet_id, 1, 1000, col, col + 1),
+            {"numberFormat": currency_fmt},
+            "numberFormat",
+        )
+
+    def _autosize(sheet_id: int, cols: int) -> dict[str, Any]:
+        return {
+            "autoResizeDimensions": {
+                "dimensions": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": cols,
+                }
+            }
+        }
+
+    requests: list[dict[str, Any]] = []
+
+    # === Dashboard: title + section headers + metric formatting ===
+    requests.append({
+        "mergeCells": {
+            "range": _range(dashboard_id, 0, 1, 0, 6),
+            "mergeType": "MERGE_ALL",
+        }
+    })
+    requests.append(_repeat(
+        _range(dashboard_id, 0, 1, 0, 6),
+        {
+            "backgroundColor": primary,
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "textFormat": {"foregroundColor": white, "bold": True, "fontSize": 18},
+        },
+        "backgroundColor,horizontalAlignment,verticalAlignment,textFormat",
+    ))
+    requests.append({
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": dashboard_id,
+                "dimension": "ROWS",
+                "startIndex": 0,
+                "endIndex": 1,
+            },
+            "properties": {"pixelSize": 50},
+            "fields": "pixelSize",
+        }
+    })
+    # Subtitle bands (Поточний місяць / За весь час)
+    for r in (2, 9):
+        requests.append({
+            "mergeCells": {
+                "range": _range(dashboard_id, r, r + 1, 0, 6),
+                "mergeType": "MERGE_ALL",
+            }
+        })
+        requests.append(_repeat(
+            _range(dashboard_id, r, r + 1, 0, 6),
+            {
+                "backgroundColor": header_bg,
+                "textFormat": {"bold": True, "fontSize": 12},
+            },
+            "backgroundColor,textFormat",
+        ))
+    # Metric blocks: rows 4..8 and 11..15 (1-based) — column A bold, column B currency
+    for hdr_row in (3, 10):  # 0-indexed Метрика|Сума header
+        requests.append(_repeat(
+            _range(dashboard_id, hdr_row, hdr_row + 1, 0, 2),
+            {"backgroundColor": header_bg, "textFormat": {"bold": True}},
+            "backgroundColor,textFormat",
+        ))
+    for r0, r1 in ((4, 8), (11, 15)):
+        requests.append(_repeat(
+            _range(dashboard_id, r0, r1, 0, 1),
+            {"textFormat": {"bold": True}},
+            "textFormat",
+        ))
+        requests.append(_repeat(
+            _range(dashboard_id, r0, r1, 1, 2),
+            {"numberFormat": currency_fmt},
+            "numberFormat",
+        ))
+    requests.append(_autosize(dashboard_id, 6))
+
+    # === Transactions: header, date column, amount column ===
+    requests.append(_table_header(transactions_id, 7))
+    requests.append(_repeat(
+        _range(transactions_id, 1, 1000, 0, 1),
+        {"numberFormat": {"type": "DATE", "pattern": "yyyy-mm-dd"}},
+        "numberFormat",
+    ))
+    requests.append(_currency_col(transactions_id, 3))
+    requests.append(_autosize(transactions_id, 7))
+
+    # === Monthly: header + currency on cols B/C/D ===
+    requests.append(_table_header(monthly_id, 5))
+    for col in (1, 2, 3):
+        requests.append(_currency_col(monthly_id, col))
+    requests.append(_autosize(monthly_id, 5))
+
+    # === Categories: header + currency on cols C/E ===
+    requests.append(_table_header(categories_id, 5))
+    requests.append(_currency_col(categories_id, 2))
+    requests.append(_currency_col(categories_id, 4))
+    requests.append(_autosize(categories_id, 5))
+
+    return requests
+
+
+def _chart_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
+    """Embed three charts on the Dashboard sheet sourced from Categories + Monthly."""
+    dashboard_id = sheet_ids[_SHEET_DASHBOARD]
+    monthly_id = sheet_ids[_SHEET_MONTHLY]
+    categories_id = sheet_ids[_SHEET_CATEGORIES]
+
+    expense_count = len(ALLOWED_CATEGORIES["Expense"])
+    monthly_data_rows = 12
+
+    # Categories layout: row 0 header, then expense rows, then income rows.
+    expense_start = 1
+    expense_end = expense_start + expense_count
+
+    # Monthly layout: row 0 header, then `monthly_data_rows` of data.
+    monthly_end = 1 + monthly_data_rows
+
+    def _src(sheet_id: int, r0: int, r1: int, c0: int, c1: int) -> dict[str, Any]:
+        return {
+            "sourceRange": {
+                "sources": [{
+                    "sheetId": sheet_id,
+                    "startRowIndex": r0,
+                    "endRowIndex": r1,
+                    "startColumnIndex": c0,
+                    "endColumnIndex": c1,
+                }]
+            }
+        }
+
+    def _overlay(row_idx: int, col_idx: int, w: int, h: int) -> dict[str, Any]:
+        return {
+            "overlayPosition": {
+                "anchorCell": {
+                    "sheetId": dashboard_id,
+                    "rowIndex": row_idx,
+                    "columnIndex": col_idx,
+                },
+                "widthPixels": w,
+                "heightPixels": h,
+            }
+        }
+
+    pie_expense = {
+        "addChart": {
+            "chart": {
+                "spec": {
+                    "title": "Витрати по категоріях (за весь час)",
+                    "pieChart": {
+                        "legendPosition": "RIGHT_LEGEND",
+                        "threeDimensional": False,
+                        "domain": _src(categories_id, expense_start, expense_end, 0, 1),
+                        "series": _src(categories_id, expense_start, expense_end, 2, 3),
+                    },
+                },
+                "position": _overlay(row_idx=16, col_idx=0, w=480, h=340),
+            }
+        }
+    }
+
+    column_monthly = {
+        "addChart": {
+            "chart": {
+                "spec": {
+                    "title": "Витрати vs Доходи по місяцях",
+                    "basicChart": {
+                        "chartType": "COLUMN",
+                        "legendPosition": "BOTTOM_LEGEND",
+                        "headerCount": 1,
+                        "axis": [
+                            {"position": "BOTTOM_AXIS", "title": "Місяць"},
+                            {"position": "LEFT_AXIS", "title": "UAH"},
+                        ],
+                        "domains": [{
+                            "domain": _src(monthly_id, 0, monthly_end, 0, 1),
+                        }],
+                        "series": [
+                            {
+                                "series": _src(monthly_id, 0, monthly_end, 1, 2),
+                                "targetAxis": "LEFT_AXIS",
+                                "color": {"red": 0.91, "green": 0.30, "blue": 0.24},
+                            },
+                            {
+                                "series": _src(monthly_id, 0, monthly_end, 2, 3),
+                                "targetAxis": "LEFT_AXIS",
+                                "color": {"red": 0.18, "green": 0.66, "blue": 0.36},
+                            },
+                        ],
+                    },
+                },
+                "position": _overlay(row_idx=16, col_idx=6, w=640, h=340),
+            }
+        }
+    }
+
+    line_balance = {
+        "addChart": {
+            "chart": {
+                "spec": {
+                    "title": "Тренд балансу по місяцях",
+                    "basicChart": {
+                        "chartType": "LINE",
+                        "legendPosition": "NO_LEGEND",
+                        "headerCount": 1,
+                        "axis": [
+                            {"position": "BOTTOM_AXIS", "title": "Місяць"},
+                            {"position": "LEFT_AXIS", "title": "Баланс, UAH"},
+                        ],
+                        "domains": [{
+                            "domain": _src(monthly_id, 0, monthly_end, 0, 1),
+                        }],
+                        "series": [
+                            {
+                                "series": _src(monthly_id, 0, monthly_end, 3, 4),
+                                "targetAxis": "LEFT_AXIS",
+                                "color": {"red": 0.26, "green": 0.52, "blue": 0.96},
+                                "lineStyle": {"width": 2, "type": "SOLID"},
+                            }
+                        ],
+                    },
+                },
+                "position": _overlay(row_idx=35, col_idx=0, w=1140, h=320),
+            }
+        }
+    }
+
+    return [pie_expense, column_monthly, line_balance]
+
+
+def _create_user_spreadsheet(sheets_service: Any, user: User) -> str:
+    """Create a fresh spreadsheet, populate values + formulas, apply formatting."""
+    create_body = _build_spreadsheet_create_body(user)
+    logger.info("Creating new spreadsheet for user id=%s", user.id)
+    created = execute_with_retry(
+        sheets_service.spreadsheets().create(
+            body=create_body,
+            fields="spreadsheetId,sheets.properties",
+        ),
+        label="spreadsheets.create",
+    )
+
+    spreadsheet_id = created.get("spreadsheetId")
+    if not spreadsheet_id:
+        raise RuntimeError("spreadsheets.create returned no spreadsheetId")
+
+    sheet_ids = {
+        s["properties"]["title"]: s["properties"]["sheetId"]
+        for s in created.get("sheets", [])
+    }
+    logger.info(
+        "Created spreadsheet id=%s for user id=%s with sheets=%s",
+        spreadsheet_id,
+        user.id,
+        list(sheet_ids.keys()),
+    )
+
+    monthly_rows = _monthly_values(12)
+    categories_rows = _categories_values()
+    values_body = {
+        "valueInputOption": "USER_ENTERED",
+        "data": [
+            {
+                "range": f"{_SHEET_DASHBOARD}!A1:B15",
+                "values": _dashboard_values(),
+            },
+            {
+                "range": f"{_SHEET_TRANSACTIONS}!A1:G1",
+                "values": [_TRANSACTIONS_HEADER],
+            },
+            {
+                "range": f"{_SHEET_MONTHLY}!A1:E{len(monthly_rows)}",
+                "values": monthly_rows,
+            },
+            {
+                "range": f"{_SHEET_CATEGORIES}!A1:E{len(categories_rows)}",
+                "values": categories_rows,
+            },
+        ],
+    }
+    execute_with_retry(
+        sheets_service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=values_body,
+        ),
+        label="spreadsheets.values.batchUpdate",
+    )
+    logger.info("Wrote initial values to spreadsheet id=%s", spreadsheet_id)
+
+    all_requests = _format_requests(sheet_ids) + _chart_requests(sheet_ids)
+    execute_with_retry(
+        sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": all_requests},
+        ),
+        label="spreadsheets.batchUpdate(format+charts)",
+    )
+    logger.info(
+        "Applied formatting + %s chart(s) to spreadsheet id=%s",
+        len(_chart_requests(sheet_ids)),
+        spreadsheet_id,
+    )
+
+    return spreadsheet_id
+
+
+def _ensure_user_spreadsheet(
+    db: Session,
+    *,
+    user: User,
+    creds: Credentials,
+) -> str:
+    """Return the user's spreadsheet, creating one if it doesn't exist yet."""
+    if user.google_spreadsheet_id:
+        logger.info(
+            "Reusing existing spreadsheet for user id=%s: spreadsheet_id=%s",
+            user.id,
+            user.google_spreadsheet_id,
+        )
+        return user.google_spreadsheet_id
+
+    sheets_service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    spreadsheet_id = _create_user_spreadsheet(sheets_service, user)
+
+    user.google_spreadsheet_id = spreadsheet_id
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.info(
+        "Saved spreadsheet_id=%s for user id=%s",
+        spreadsheet_id,
+        user.id,
+    )
+    return spreadsheet_id
+
+
+def _append_transaction_row(
+    sheets_service: Any,
+    spreadsheet_id: str,
+    row: list[Any],
+) -> dict[str, Any]:
+    """Append a single transaction row to the user's Transactions sheet."""
+    return execute_with_retry(
+        sheets_service.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range="Transactions!A:G",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [row]},
+        ),
+        label="spreadsheets.values.append",
+    )
+
+
+async def reset_user_spreadsheet(
+    db: Session,
+    *,
+    user_id: int,
+) -> dict[str, Any]:
+    """Drop the user's existing spreadsheet_id and provision a fresh one.
+
+    The previous spreadsheet remains in the user's Drive — we never delete user
+    data; they can remove it manually if they don't need it.
+    """
+    user = _resolve_user(db, user_id=user_id)
+    if not user:
+        return {"status": "error", "error": "User not found."}
+
+    creds = _get_google_credentials(db, user_id=user.id)
+    if not creds:
+        return {
+            "status": "error",
+            "error": "Google account is not connected. Please authorize Google access first.",
+        }
+
+    old_id = user.google_spreadsheet_id
+    logger.info(
+        "reset_user_spreadsheet: user id=%s discarding old spreadsheet_id=%s",
+        user.id,
+        old_id,
+    )
+    user.google_spreadsheet_id = None
+    db.add(user)
+    db.commit()
+
+    try:
+        sheets_service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        new_id = _create_user_spreadsheet(sheets_service, user)
+    except Exception as exc:
+        logger.exception(
+            "reset_user_spreadsheet: failed to create new spreadsheet for user id=%s: %s",
+            user.id,
+            exc,
+        )
+        # Restore the old id so we don't leave the user without anything to write to.
+        user.google_spreadsheet_id = old_id
+        db.add(user)
+        db.commit()
+        return {"status": "error", "error": str(exc)}
+
+    user.google_spreadsheet_id = new_id
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "status": "ok",
+        "old_spreadsheet_id": old_id,
+        "spreadsheet_id": new_id,
+        "spreadsheet_url": _spreadsheet_url(new_id),
+    }
+
+
+async def record_transaction(
+    db: Session,
+    transaction_type: str,
+    amount: float,
+    currency: str = "UAH",
+    category: str = "Other",
+    description: str = "",
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+) -> dict[str, Any]:
+    """Record an Expense/Income transaction to the user's Google Sheet."""
+    logger.info(
+        "record_transaction called | user_id=%s telegram_id=%s type=%s amount=%s "
+        "currency=%s category=%s description=%r",
+        user_id,
+        telegram_id,
+        transaction_type,
+        amount,
+        currency,
+        category,
+        description,
+    )
+
+    if getattr(settings, "finance_stub_mode", False):
+        logger.warning(
+            "FINANCE_STUB_MODE is enabled — skipping real Google Sheets write. "
+            "Set FINANCE_STUB_MODE=false in .env to write to the spreadsheet."
+        )
+        return {"status": "ok", "stub": True}
+
+    user = _resolve_user(db, user_id=user_id, telegram_id=telegram_id)
+    if not user:
+        logger.error(
+            "record_transaction: user not found (user_id=%s, telegram_id=%s)",
+            user_id,
+            telegram_id,
+        )
+        return {
+            "status": "error",
+            "error": "User not found. Please start the bot first.",
+        }
+
+    normalized_type = _normalize_transaction_type(transaction_type)
+    if not normalized_type:
+        return {
+            "status": "error",
+            "error": "transaction_type must be either 'Expense' or 'Income'.",
+        }
+
+    if amount <= 0:
+        return {
+            "status": "error",
+            "error": "amount must be a positive number.",
+        }
+
+    allowed = ALLOWED_CATEGORIES[normalized_type]
+    if category not in allowed:
+        allowed_str = ", ".join(sorted(allowed))
+        return {
+            "status": "error",
+            "error": (
+                f"Invalid category '{category}' for {normalized_type}. "
+                f"Allowed categories: {allowed_str}."
+            ),
+        }
+
+    creds = _get_google_credentials(
+        db,
+        user_id=user.id,
+    )
+    if not creds:
+        return {
+            "status": "error",
+            "error": (
+                "Google account is not connected. Please authorize Google access first."
+            ),
+        }
+
+    try:
+        spreadsheet_id = _ensure_user_spreadsheet(db, user=user, creds=creds)
+    except Exception as exc:
+        logger.exception(
+            "Failed to ensure spreadsheet for user id=%s: %s",
+            user.id,
+            exc,
+        )
+        db.rollback()
+        return {"status": "error", "error": str(exc)}
+
+    now_utc = datetime.datetime.now(datetime.UTC)
+    row = [
+        now_utc.date().isoformat(),
+        now_utc.strftime("%H:%M:%S"),
+        normalized_type,
+        float(amount),
+        (currency or "UAH").upper(),
+        category,
+        description,
+    ]
+
+    logger.info(
+        "Appending row to spreadsheet_id=%s (user id=%s): %s",
+        spreadsheet_id,
+        user.id,
+        row,
+    )
+    sheets_service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    try:
+        append_result = _append_transaction_row(sheets_service, spreadsheet_id, row)
+    except Exception as exc:
+        if not is_spreadsheet_missing(exc):
+            logger.exception(
+                "Sheets append failed for user id=%s spreadsheet_id=%s: %s",
+                user.id,
+                spreadsheet_id,
+                exc,
+            )
+            return {"status": "error", "error": str(exc)}
+
+        # Spreadsheet was deleted in Drive (or sheet/range gone) — recreate and retry once.
+        logger.warning(
+            "Append got 404 for user id=%s spreadsheet_id=%s — spreadsheet missing, "
+            "recreating and retrying once",
+            user.id,
+            spreadsheet_id,
+        )
+        user.google_spreadsheet_id = None
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        try:
+            spreadsheet_id = _ensure_user_spreadsheet(db, user=user, creds=creds)
+            append_result = _append_transaction_row(sheets_service, spreadsheet_id, row)
+        except Exception as recreate_exc:
+            logger.exception(
+                "Sheets recreate+append failed for user id=%s: %s",
+                user.id,
+                recreate_exc,
+            )
+            return {"status": "error", "error": str(recreate_exc)}
+        logger.info(
+            "Recreated spreadsheet and re-appended row for user id=%s (new id=%s)",
+            user.id,
+            spreadsheet_id,
+        )
+
+    updated_range = append_result.get("updates", {}).get("updatedRange")
+    spreadsheet_url = _spreadsheet_url(spreadsheet_id)
+    logger.info(
+        "Sheets append OK for user id=%s spreadsheet_id=%s updated_range=%s",
+        user.id,
+        spreadsheet_id,
+        updated_range,
+    )
+    return {
+        "status": "ok",
+        "spreadsheet_id": spreadsheet_id,
+        "spreadsheet_url": spreadsheet_url,
+        "transaction_type": normalized_type,
+        "amount": float(amount),
+        "currency": (currency or "UAH").upper(),
+        "category": category,
+        "description": description,
+        "updated_range": updated_range,
+    }
+
+
+async def list_recent_transactions(
+    db: Session,
+    *,
+    user_id: int,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Read the last ``limit`` rows from the user's Transactions sheet.
+
+    Returns an empty list if the user has not yet connected Google or no
+    spreadsheet has been created (i.e. they have no recorded transactions).
+    """
+    user = _resolve_user(db, user_id=user_id)
+    if not user or not user.google_spreadsheet_id:
+        return []
+
+    creds = _get_google_credentials(db, user_id=user_id)
+    if not creds:
+        return []
+
+    try:
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        result = execute_with_retry(
+            service.spreadsheets().values().get(
+                spreadsheetId=user.google_spreadsheet_id,
+                range="Transactions!A2:G",
+            ),
+            label="spreadsheets.values.get",
+        )
+    except Exception as exc:
+        logger.exception(
+            "list_recent_transactions failed for user_id=%s: %s",
+            user_id,
+            exc,
+        )
+        return []
+
+    rows = result.get("values", []) or []
+    rows = rows[-limit:] if limit else rows
+    transactions: list[dict[str, Any]] = []
+    for row in reversed(rows):
+        padded = row + [""] * (7 - len(row))
+        try:
+            amount = float(padded[3]) if padded[3] != "" else None
+        except ValueError:
+            amount = None
+        transactions.append(
+            {
+                "date": padded[0],
+                "time": padded[1],
+                "type": padded[2],
+                "amount": amount,
+                "currency": padded[4],
+                "category": padded[5],
+                "description": padded[6],
+            }
+        )
+    return transactions
+
+
 async def add_expense(
     db: Session,
     amount: float,
     currency: str = "UAH",
-    category: str | None = None,
-    description: str | None = None,
+    category: str = "Other",
+    description: str = "",
     user_id: int | None = None,
     telegram_id: int | None = None,
 ) -> dict[str, Any]:
-    """Record a new expense for the given user.
-
-    Args:
-        user_id:      Internal user ID.
-        db:           Database session.
-        amount:       Monetary amount.
-        currency:     Currency code (default: UAH).
-        category:     Expense category.
-        description:  Short description of the expense.
-
-    Returns:
-        Dict with ``status`` and ``expense_id`` on success, or ``error`` on failure.
-    """
-    user = _resolve_user(db, user_id=user_id, telegram_id=telegram_id)
-    if not user:
-        return {
-            "status": "error",
-            "error": "User not found. Please start the bot with /start first.",
-        }
-
-    expense = Expense(
-        user_id=user.id,
+    """Backward-compatible wrapper for legacy callers."""
+    return await record_transaction(
+        db=db,
+        transaction_type="Expense",
         amount=amount,
-        currency=currency.upper(),
-        category=category or "other",
+        currency=currency,
+        category=category,
         description=description,
-        created_at=datetime.datetime.now(datetime.UTC),
+        user_id=user_id,
+        telegram_id=telegram_id,
     )
-    db.add(expense)
-    db.commit()
-    db.refresh(expense)
-
-    return {
-        "status": "ok",
-        "expense_id": expense.id,
-        "amount": expense.amount,
-        "currency": expense.currency,
-        "category": expense.category,
-        "description": expense.description,
-    }
-
-
-async def get_expenses(
-    db: Session,
-    limit: int = 10,
-    user_id: int | None = None,
-    telegram_id: int | None = None,
-) -> dict[str, Any]:
-    """Retrieve the most recent expenses for a user.
-
-    Args:
-        user_id:     Internal user ID.
-        db:          Database session.
-        limit:       Maximum number of records to return (default: 10).
-
-    Returns:
-        Dict with ``status`` and ``expenses`` list on success.
-    """
-    user = _resolve_user(db, user_id=user_id, telegram_id=telegram_id)
-    if not user:
-        return {"status": "error", "error": "User not found."}
-
-    records = (
-        db.query(Expense)
-        .filter(Expense.user_id == user.id)
-        .order_by(Expense.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-
-    return {
-        "status": "ok",
-        "expenses": [
-            {
-                "id": e.id,
-                "amount": e.amount,
-                "currency": e.currency,
-                "category": e.category,
-                "description": e.description,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-            for e in records
-        ],
-    }

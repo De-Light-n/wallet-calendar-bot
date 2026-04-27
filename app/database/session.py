@@ -1,5 +1,5 @@
 """Database session and engine setup."""
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.core.config import settings
@@ -30,3 +30,20 @@ def init_db() -> None:
     from app.database import models  # noqa: F401 – registers models on Base
 
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight runtime migration for existing deployments without Alembic.
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    existing_columns = {col["name"] for col in inspector.get_columns("users")}
+    new_user_columns = [
+        ("google_spreadsheet_id", "VARCHAR(128)"),
+        ("email", "VARCHAR(255)"),
+        ("picture_url", "TEXT"),
+        ("timezone", "VARCHAR(64) NOT NULL DEFAULT 'UTC'"),
+    ]
+    with engine.begin() as conn:
+        for col_name, col_type in new_user_columns:
+            if col_name not in existing_columns:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))

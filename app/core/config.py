@@ -41,9 +41,12 @@ class AppSettings:
     google_client_secret: str
     google_project_id: str
     google_redirect_uri: str
+    google_template_spreadsheet_id: str
 
     database_url: str
     secret_key: str
+
+    finance_stub_mode: bool
 
     def is_channel_enabled(self, channel: str) -> bool:
         return channel in self.enabled_channels
@@ -78,11 +81,13 @@ def get_settings() -> AppSettings:
             "GOOGLE_REDIRECT_URI",
             "http://localhost:8000/auth/google/callback",
         ),
+        google_template_spreadsheet_id=os.getenv("GOOGLE_TEMPLATE_SPREADSHEET_ID", ""),
         database_url=os.getenv(
             "DATABASE_URL",
             "postgresql+psycopg2://postgres:postgres@localhost:5432/wallet_calendar",
         ),
         secret_key=os.getenv("SECRET_KEY", ""),
+        finance_stub_mode=os.getenv("FINANCE_STUB_MODE", "false").lower() == "true",
     )
 
 
