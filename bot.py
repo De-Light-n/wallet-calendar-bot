@@ -17,6 +17,7 @@ load_dotenv()
 from aiogram import Bot, Dispatcher  # noqa: E402
 
 from app.bot.handlers import router  # noqa: E402
+from app.channels.discord_bot import start_discord_bot, stop_discord_bot  # noqa: E402
 from app.core.config import settings  # noqa: E402
 
 logging.basicConfig(
@@ -29,7 +30,12 @@ async def main() -> None:
     bot = Bot(token=settings.telegram_bot_token)
     dp = Dispatcher()
     dp.include_router(router)
-    await dp.start_polling(bot, allowed_updates=["message"])
+
+    await start_discord_bot()
+    try:
+        await dp.start_polling(bot, allowed_updates=["message"])
+    finally:
+        await stop_discord_bot()
 
 
 if __name__ == "__main__":

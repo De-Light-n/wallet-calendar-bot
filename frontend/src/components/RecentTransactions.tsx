@@ -27,15 +27,16 @@ export function RecentTransactions() {
   return (
     <section className="card">
       <h2>💰 Останні транзакції</h2>
+      <p className="card-subtitle">10 свіжих записів із Google Sheets</p>
 
       {isLoading && <div className="muted">Завантажую…</div>}
       {error && <div className="muted">Не вдалось завантажити.</div>}
 
       {data && data.items.length === 0 && (
         <div className="empty">
-          Транзакцій ще немає. Напиши боту в Telegram, наприклад:
+          Транзакцій ще немає. Напиши боту, наприклад:
           <br />
-          <em>"Купив каву за 80 грн"</em>
+          <em>«Купив каву за 80 грн»</em>
         </div>
       )}
 
@@ -44,10 +45,15 @@ export function RecentTransactions() {
           {data.items.map((t, i) => (
             <li key={`${t.date}-${t.time}-${i}`}>
               <span>
-                <strong>{t.category || '—'}</strong>
-                {t.description && <span style={{ opacity: 0.7 }}> · {t.description}</span>}
-                <br />
-                <small style={{ opacity: 0.6 }}>{t.date} {t.time}</small>
+                <span className="list-item__title">
+                  {t.category || '—'}
+                  {t.description && (
+                    <span className="list-item__inline"> · {t.description}</span>
+                  )}
+                </span>
+                <span className="list-item__sub">
+                  {t.date} {t.time}
+                </span>
               </span>
               <span className={t.type === 'Income' ? 'amount-pos' : 'amount-neg'}>
                 {t.type === 'Income' ? '+' : '−'}
@@ -59,7 +65,12 @@ export function RecentTransactions() {
       )}
 
       {data?.spreadsheet_url && (
-        <a className="spread-link" href={data.spreadsheet_url} target="_blank" rel="noreferrer">
+        <a
+          className="spread-link"
+          href={data.spreadsheet_url}
+          target="_blank"
+          rel="noreferrer"
+        >
           Відкрити Google Sheet →
         </a>
       )}

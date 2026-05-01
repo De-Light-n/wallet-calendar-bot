@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware  # noqa: E402
 from app.api.me import router as api_router  # noqa: E402
 from app.auth.routes import router as auth_router  # noqa: E402
 from app.bot.handlers import router as bot_router  # noqa: E402
+from app.channels.discord_bot import start_discord_bot, stop_discord_bot  # noqa: E402
 from app.channels.routes import router as channels_router  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.database.session import init_db  # noqa: E402
@@ -108,6 +109,8 @@ async def on_startup() -> None:
     init_db()
     logger.info("Database initialized")
 
+    await start_discord_bot()
+
     skip_reason = _webhook_skip_reason()
     if skip_reason is not None:
         logger.info(
@@ -132,6 +135,8 @@ async def on_startup() -> None:
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     """Delete the Telegram webhook on shutdown (only if it was registered)."""
+    await stop_discord_bot()
+
     if not _webhook_configured():
         return
     logger.info("Deleting Telegram webhook from %s%s", WEBHOOK_URL, WEBHOOK_PATH)

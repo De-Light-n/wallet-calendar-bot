@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import zoneinfo
 
+import os
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -16,30 +18,58 @@ from app.tools.finance_tool import list_recent_transactions
 
 router = APIRouter(prefix="/api", tags=["api"])
 
+_LINK_SUPPORTED_CHANNELS = {"telegram", "slack", "discord"}
 
-def _bot_username() -> str | None:
-    """Best-effort extraction of the bot's @username for deep links.
 
-    The Telegram bot username is not stored in settings; we rely on the
-    operator to set ``TELEGRAM_BOT_USERNAME`` in the environment if they want a
-    clickable deep link. Otherwise the frontend falls back to plain instructions.
+def _telegram_bot_url() -> str | None:
+    """Build a t.me deep link if TELEGRAM_BOT_USERNAME is set."""
+    username = os.getenv("TELEGRAM_BOT_USERNAME")
+    return f"https://t.me/{username}" if username else None
+
+
+def _channel_install_payload(channel: str, code: str) -> tuple[str | None, str]:
+    """Return (bot_url, instructions) for the given channel.
+
+    bot_url is an env-driven install / open link; None when not configured.
+    instructions is a short user-facing hint shown next to the code.
     """
-    import os
-    return os.getenv("TELEGRAM_BOT_USERNAME") or None
+    if channel == "telegram":
+        return (
+            _telegram_bot_url(),
+            f"Відкрий бот у Telegram і напиши: /link {code}",
+        )
+    if channel == "slack":
+        return (
+            os.getenv("SLACK_INSTALL_URL") or None,
+            f"Напиши боту в Slack DM (або тегни в каналі): /link {code}",
+        )
+    # discord
+    return (
+        os.getenv("DISCORD_INSTALL_URL") or None,
+        f"Напиши боту в Discord DM (або в каналі з ним): /link {code}",
+    )
 
 
 @router.post("/link-codes")
 async def create_link_code(
+    payload: dict | None = Body(default=None),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    channel = ((payload or {}).get("channel") or "telegram").lower()
+    if channel not in _LINK_SUPPORTED_CHANNELS:
+        raise HTTPException(status_code=400, detail=f"Unsupported channel: {channel}")
+    if not settings.is_channel_enabled(channel):
+        raise HTTPException(status_code=404, detail=f"Channel disabled: {channel}")
+
     link = generate_link_code(db, user)
-    bot_username = _bot_username()
+    bot_url, instructions = _channel_install_payload(channel, link.code)
     return {
         "code": link.code,
         "expires_at": link.expires_at.isoformat(),
-        "bot_url": f"https://t.me/{bot_username}" if bot_username else None,
-        "instructions": f"Відкрий бот у Telegram і напиши: /link {link.code}",
+        "channel": channel,
+        "bot_url": bot_url,
+        "instructions": instructions,
     }
 
 

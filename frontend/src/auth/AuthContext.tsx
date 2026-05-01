@@ -16,6 +16,7 @@ export interface CurrentUser {
   picture_url: string | null
   timezone: string
   google_spreadsheet_id: string | null
+  enabled_channels: string[]
   channels: ChannelLink[]
 }
 

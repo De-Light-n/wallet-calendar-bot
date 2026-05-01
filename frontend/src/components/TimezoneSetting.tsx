@@ -22,7 +22,8 @@ export function TimezoneSetting() {
   const [tz, setTz] = useState(user?.timezone ?? 'UTC')
 
   const mutation = useMutation({
-    mutationFn: (newTz: string) => api.put<{ timezone: string }>('/api/me/timezone', { timezone: newTz }),
+    mutationFn: (newTz: string) =>
+      api.put<{ timezone: string }>('/api/me/timezone', { timezone: newTz }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['auth', 'me'] }),
   })
 
@@ -31,22 +32,16 @@ export function TimezoneSetting() {
   return (
     <section className="card">
       <h2>⚙️ Часовий пояс</h2>
-      <p className="muted">Використовується для обробки часу в подіях календаря.</p>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select
-          value={tz}
-          onChange={(e) => setTz(e.target.value)}
-          style={{
-            padding: '8px 12px',
-            borderRadius: 6,
-            border: '1px solid var(--border)',
-            background: 'var(--bg)',
-            color: 'var(--text-h)',
-            fontSize: 14,
-          }}
-        >
+      <p className="card-subtitle">
+        Використовується для обробки часу в подіях календаря.
+      </p>
+
+      <div className="tz-row">
+        <select value={tz} onChange={(e) => setTz(e.target.value)} className="tz-select">
           {options.map((z) => (
-            <option key={z} value={z}>{z}</option>
+            <option key={z} value={z}>
+              {z}
+            </option>
           ))}
         </select>
         <button
@@ -56,8 +51,11 @@ export function TimezoneSetting() {
         >
           {mutation.isPending ? 'Зберігаю…' : 'Зберегти'}
         </button>
-        {mutation.isError && <span className="muted small" style={{ color: '#dc2626' }}>Помилка</span>}
-        {mutation.isSuccess && <span className="muted small" style={{ color: '#16a34a' }}>Збережено ✓</span>}
+      </div>
+
+      <div className="tz-status" aria-live="polite">
+        {mutation.isError && <span className="muted small tz-status--err">Помилка збереження</span>}
+        {mutation.isSuccess && <span className="muted small tz-status--ok">Збережено ✓</span>}
       </div>
     </section>
   )

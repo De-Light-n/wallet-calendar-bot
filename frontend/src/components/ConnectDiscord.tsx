@@ -12,39 +12,40 @@ interface LinkCodeResponse {
   instructions: string
 }
 
-export function ConnectTelegram() {
+export function ConnectDiscord() {
   const { user, refresh } = useAuth()
   const [code, setCode] = useState<LinkCodeResponse | null>(null)
 
-  const tgConnected = user?.channels.some((c) => c.channel === 'telegram')
+  const discordConnected = user?.channels.some((c) => c.channel === 'discord')
 
   const mutation = useMutation({
     mutationFn: () =>
-      api.post<LinkCodeResponse>('/api/link-codes', { channel: 'telegram' }),
+      api.post<LinkCodeResponse>('/api/link-codes', { channel: 'discord' }),
     onSuccess: (data) => setCode(data),
   })
 
   return (
     <section className="card">
       <h2>
-        💬 Telegram{' '}
-        {tgConnected ? (
+        🎮 Discord{' '}
+        {discordConnected ? (
           <span className="badge ok">підключено</span>
         ) : (
           <span className="badge muted">не підключено</span>
         )}
       </h2>
 
-      {tgConnected ? (
+      {discordConnected ? (
         <p className="muted">
-          Бот прив'язаний до твого акаунта. Просто пиши йому — він запише
-          транзакцію або створить подію.
+          Discord прив'язаний до твого акаунта. Пиши боту в DM або тегни
+          <code> @bot </code> у каналі — він запише транзакцію або створить
+          подію.
         </p>
       ) : (
         <>
           <p className="muted">
-            Щоб підключити Telegram, згенеруй одноразовий код і введи його в боті
-            командою <code>/link</code>.
+            Запроси бота на свій сервер (або відкрий DM), потім згенеруй
+            одноразовий код і відправ його командою <code>/link</code>.
           </p>
 
           {!code && (
@@ -63,13 +64,13 @@ export function ConnectTelegram() {
               <p className="muted">
                 {code.bot_url ? (
                   <>
-                    Відкрий бота:{' '}
+                    Запроси бота:{' '}
                     <a href={code.bot_url} target="_blank" rel="noreferrer">
-                      {code.bot_url}
+                      Add to Discord
                     </a>
                   </>
                 ) : (
-                  'Відкрий свого Telegram-бота'
+                  'Відкрий DM з ботом у Discord'
                 )}{' '}
                 і напиши:
               </p>

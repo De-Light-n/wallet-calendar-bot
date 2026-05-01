@@ -39,13 +39,14 @@ export function UpcomingEvents() {
   return (
     <section className="card">
       <h2>📅 Найближчі події</h2>
+      <p className="card-subtitle">Найближчі 10 подій з Google Calendar</p>
 
       {isLoading && <div className="muted">Завантажую…</div>}
       {error && <div className="muted">Не вдалось завантажити.</div>}
 
       {data && data.items.length === 0 && (
         <div className="empty">
-          Подій немає. Напиши боту: <em>"Зустріч завтра о 14:00"</em>
+          Подій немає. Напиши боту: <em>«Зустріч завтра о 14:00»</em>
         </div>
       )}
 
@@ -54,13 +55,22 @@ export function UpcomingEvents() {
           {data.items.map((ev) => (
             <li key={ev.id}>
               <span>
-                <strong>{ev.title || '(без назви)'}</strong>
-                {ev.location && <small style={{ opacity: 0.6 }}> · {ev.location}</small>}
-                <br />
-                <small style={{ opacity: 0.6 }}>{formatStart(ev.start)}</small>
+                <span className="list-item__title">
+                  {ev.title || '(без назви)'}
+                  {ev.location && (
+                    <span className="list-item__inline"> · {ev.location}</span>
+                  )}
+                </span>
+                <span className="list-item__sub">{formatStart(ev.start)}</span>
               </span>
               {ev.html_link && (
-                <a href={ev.html_link} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
+                <a
+                  href={ev.html_link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="list-item__link"
+                  aria-label="Відкрити подію в Google Calendar"
+                >
                   →
                 </a>
               )}

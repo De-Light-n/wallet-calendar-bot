@@ -17,9 +17,13 @@ class DiscordAdapter(ChannelAdapter):
         if not text or not external_user_id:
             return None
 
+        # Skip bot-authored messages so we never reply to ourselves or another bot.
+        if author.get("bot") or author.get("system"):
+            return None
+
         context = AgentRequestContext(
             channel=self.channel_name,
             external_user_id=str(external_user_id),
             message_id=str(payload.get("id") or "") or None,
         )
-        return NormalizedMessage(context=context, text=text)
+        return NormalizedMessage(context=context, text=text.strip())
