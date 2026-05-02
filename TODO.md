@@ -138,91 +138,36 @@ else:
 
 ## 2. Update / Delete подій у календарі
 
-### Що хочемо
+### Що вже зроблено
 
-- `update_event` — перенести час, перейменувати, поміняти локацію без переходу в Google Calendar UI.
-- `delete_event` — відмінити подію.
+- ✅ `update_event(event_id, ...)` як LLM tool — patch-семантика, всі поля окрім `event_id` опційні. Time-зміна вимагає **обидва** start+end (інакше all-day vs timed формат би переплутався). [app/tools/calendar_tool.py](app/tools/calendar_tool.py)
+- ✅ `delete_event(event_id)` — використовує `events.delete()`. Подія йде в Google Calendar Trash, 30 днів автовідновлення з UI.
+- ✅ Обидва зареєстровано в [app/agent/llm_client.py](app/agent/llm_client.py); system prompt оновлено з workflow ("спочатку list, питай при ambiguity, заспокой про Trash").
+- ✅ Логування з `channel=` для post-mortem (раніше додано в `run_agent`).
 
-### Чому це окремий пункт, а не зразу
+### Що залишилось (опційно, по сигналу)
 
-LLM має **знайти подію** перед update/delete. Зараз `list_upcoming_events` уже зареєстрований як tool, тому це базово можливо: LLM спочатку викликає list, отримує `event_id`, потім update/delete. Але є нюанси по UX і ризику.
-
-### Дизайн
-
-#### `update_event(event_id, **fields)`
-
-Параметри: `event_id` (обов'язковий, отриманий з `list_upcoming_events`) + ті ж поля, що і в `create_calendar_event`, але всі опціональні. Patch-семантика — оновлюються тільки передані поля.
-
-API: `service.events().patch(calendarId="primary", eventId=event_id, body={...})`. Повертає оновлений event.
-
-LLM workflow для "перенеси зустріч з Сашею на 16:00":
-1. `list_upcoming_events(query="Саша", time_min=today)` → отримує список
-2. Якщо знайдено 1 → `update_event(event_id=..., start_datetime="...", end_datetime="...")`.
-3. Якщо знайдено кілька → відповідь юзеру з вибором.
-4. Якщо нічого → відповідь "не знайшов".
-
-**Ризик низький:** помилка в update легко виправляється новим повідомленням; Google зберігає історію змін.
-
-#### `delete_event(event_id)`
-
-API: `service.events().delete(calendarId="primary", eventId=event_id)` → подія йде в **Trash** Google Calendar (30 днів автовідновлення). Це рятує від випадкового видалення.
-
-**Ризики:**
-- Голосові повідомлення через Whisper можуть розпізнати "віддали" як "видали" → випадкове видалення.
-- LLM може знайти не ту подію при кількох схожих.
-- Юзер не одразу побачить що подія в trash.
-
-**Mitigation:**
-- Soft-confirmation flow: бот відповідає "Підтверди: видалити подію 'X' на завтра о 14:00? Напиши 'так' або 'ні'." Тільки на "так" — реальний виклик API.
-- Це додає **stateful conversation** — треба зберігати "очікую підтвердження видалення event_id=X" між повідомленнями. Складніше імплементувати.
-- Альтернатива: покладатися на 30-денний trash + лог в Telegram — юзер бачить "Видалив подію X. Якщо помилково — `/restore_event` за 30 днів".
-
-### Етапи
-
-1. **PR1: `update_event`** — як новий tool. Без stateful confirmation. Тестувати що patch правильно ставить `timeZone` (так само як create).
-2. **PR2: `delete_event` без confirmation** + повідомлення з event_id для відновлення. Trash-fallback зробить ризик прийнятним.
-3. **(опц.) PR3: stateful confirmation** для delete — якщо стане ясно що випадкові видалення трапляються.
-4. **(опц.) PR4: `restore_event(event_id)`** — повертає з trash. API: `events.get` з `?showDeleted=true` + `events.update` з `status="confirmed"`.
-
-### Що сильно полегшує
-
-- `list_upcoming_events` вже tool — LLM може шукати події по `query`/`time_min`/`time_max`.
-- `execute_with_retry` обгортає всі Calendar виклики — мережевих помилок не боїмось.
-- Логування кожного tool-виклику в `llm_client.py` — буде видно "LLM запросив delete event_id=X" в логах при post-mortem.
+1. **Stateful confirmation flow для delete** — якщо в реальному використанні зловиш кейси випадкового видалення (Whisper "віддали" → "видали", або LLM не та подія). Треба:
+   - Зберігати pending-операцію `("delete", event_id, summary)` між повідомленнями (Redis або таблиця).
+   - Бот при `delete_event` спочатку питає "Видалити подію X? так/ні", виконує тільки на наступне "так".
+   - Реалізувати по сигналу — поки немає, покладаємось на 30-денний Trash як safety net.
+2. **`restore_event(event_id)` tool** — щоб не лазити в Calendar UI. API: `events.get` з `?showDeleted=true` → `events.update` з `status="confirmed"`. Корисний коли робитимемо stateful confirmation (юзер може сказати "повернути").
+3. **Тести** на `update_event` / `delete_event` — особливо edge-кейси: half-update time (start без end), all-day vs timed mismatch, неіснуючий event_id.
 
 ---
 
-## 3. Розділення відповідальностей між `bot.py` і `app/main.py` (Discord double-start)
+## 3. Майбутнє масштабування channel-runners (NOT NOW)
 
-### Проблема
+### Що вже зроблено
 
-Discord gateway зараз стартує **в обох** entry-point'ах:
-- [bot.py:34](bot.py) — `await start_discord_bot()` поряд з Telegram polling.
-- [app/main.py:112](app/main.py) — `await start_discord_bot()` у FastAPI startup-event.
-
-Якщо локально запустити одночасно `python bot.py` (для Telegram polling) **і** `uvicorn app.main:app` (для Slack webhook + frontend API) — отримуємо два Discord-клієнти, що конектяться **одним токеном**. Discord розриває одну з сесій з `WebSocketClosure` / IDENTIFY rate limit. На проді конфлікт менш помітний (один процес), але архітектурний дубль залишається і блокує будь-який чистий деплой типу "uvicorn окремо, gateway окремо".
-
-### Рішення (після того як протестуємо що Discord взагалі працює)
-
-Розподіл відповідальностей:
+Discord gateway стартує **тільки в `bot.py`** — раніше дублювався і в `app/main.py`, що породжувало race на `/link` (обидва процеси одночасно ловили подію → один обробляв успішно, другий ловив `LinkCodeError` "вже використано"). Видалили з `main.py` — тепер чистий розподіл:
 
 | Файл | Що тримає | Коли запускати |
 |------|-----------|----------------|
 | `app/main.py` (uvicorn) | HTTP-only: Telegram webhook (prod), Slack webhook, frontend API | Завжди (prod + local) |
 | `bot.py` | Persistent connections: Telegram polling (dev), Discord gateway | Local-dev окремо; prod — окремий процес/контейнер |
 
-### Зміни в коді
-
-1. У [app/main.py](app/main.py) **видалити**:
-   - рядок `from app.channels.discord_bot import start_discord_bot, stop_discord_bot`
-   - виклик `await start_discord_bot()` у `on_startup`
-   - виклик `await stop_discord_bot()` у `on_shutdown`
-2. [bot.py](bot.py) залишити як є — він уже стартує і Telegram polling, і Discord gateway.
-3. Оновити `docs/hosting.md` (коли буде): на проді запускати `uvicorn app.main:app` як HTTP-сервіс + `python bot.py` як окремий worker (systemd unit / Fly.io processes / Docker compose service).
-
-### Чому *після* тестування
-
-Зараз треба підтвердити що Discord-runner у `bot.py` справді ловить повідомлення і працює `/link`-флоу. Якщо викинути зараз з `main.py` — і виявиться що в `bot.py` десь баг, то Discord відмерне, і важче відлажити що зламалось саме від видалення vs від існуючої проблеми. Спочатку доводимо обидва варіанти до зеленого стану, потім "обрізаємо".
+На проді треба запускати обидва процеси (як systemd unit + worker, або Fly.io `[processes]` секцією, або Docker compose з двома сервісами). Документувати в `docs/hosting.md` коли він з'явиться.
 
 ### Майбутнє масштабування (NOT NOW)
 

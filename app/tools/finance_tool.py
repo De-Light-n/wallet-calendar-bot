@@ -293,6 +293,24 @@ def _format_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
             }
         }
 
+    def _set_column_widths(sheet_id: int, widths_px: list[int]) -> list[dict[str, Any]]:
+        """Set explicit pixel widths column-by-column. One request per column."""
+        return [
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": idx,
+                        "endIndex": idx + 1,
+                    },
+                    "properties": {"pixelSize": px},
+                    "fields": "pixelSize",
+                }
+            }
+            for idx, px in enumerate(widths_px)
+        ]
+
     requests: list[dict[str, Any]] = []
 
     # === Dashboard: title + section headers + metric formatting ===
@@ -368,19 +386,28 @@ def _format_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
         "numberFormat",
     ))
     requests.append(_currency_col(transactions_id, 3))
-    requests.append(_autosize(transactions_id, 7))
+    # Date | Time | Type | Amount | Currency | Category | Description
+    requests.extend(_set_column_widths(
+        transactions_id, [110, 90, 110, 130, 100, 170, 320]
+    ))
 
     # === Monthly: header + currency on cols B/C/D ===
     requests.append(_table_header(monthly_id, 5))
     for col in (1, 2, 3):
         requests.append(_currency_col(monthly_id, col))
-    requests.append(_autosize(monthly_id, 5))
+    # Місяць | Витрати | Доходи | Баланс | Кількість
+    requests.extend(_set_column_widths(
+        monthly_id, [120, 140, 140, 140, 130]
+    ))
 
     # === Categories: header + currency on cols C/E ===
     requests.append(_table_header(categories_id, 5))
     requests.append(_currency_col(categories_id, 2))
     requests.append(_currency_col(categories_id, 4))
-    requests.append(_autosize(categories_id, 5))
+    # Категорія | Тип | Сума | Кількість | Середня
+    requests.extend(_set_column_widths(
+        categories_id, [200, 110, 140, 130, 140]
+    ))
 
     return requests
 
@@ -920,6 +947,137 @@ async def list_recent_transactions(
             }
         )
     return transactions
+
+
+async def summarize_transactions(
+    db: Session,
+    *,
+    user_id: int,
+    months: int = 12,
+) -> dict[str, Any]:
+    """Read all transactions and aggregate into category + monthly buckets.
+
+    Returns a dict shaped for the frontend Finance dashboard:
+      {
+        "by_category": [{"category": str, "type": str, "amount": float, "count": int}, ...],
+        "by_month":    [{"month": "YYYY-MM", "expense": float, "income": float, "balance": float}, ...],
+        "totals":      {"expense": float, "income": float, "balance": float, "count": int},
+      }
+
+    Empty lists / zeros when the user has no spreadsheet, no oauth, or no rows.
+    """
+    empty: dict[str, Any] = {
+        "by_category": [],
+        "by_month": [],
+        "totals": {"expense": 0.0, "income": 0.0, "balance": 0.0, "count": 0},
+    }
+
+    user = _resolve_user(db, user_id=user_id)
+    if not user or not user.google_spreadsheet_id:
+        return empty
+
+    creds = _get_google_credentials(db, user_id=user_id)
+    if not creds:
+        return empty
+
+    try:
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        result = execute_with_retry(
+            service.spreadsheets().values().get(
+                spreadsheetId=user.google_spreadsheet_id,
+                range="Transactions!A2:G",
+            ),
+            label="spreadsheets.values.get",
+        )
+    except Exception as exc:
+        logger.exception(
+            "summarize_transactions failed for user_id=%s: %s",
+            user_id,
+            exc,
+        )
+        return empty
+
+    rows = result.get("values", []) or []
+
+    cat_buckets: dict[tuple[str, str], dict[str, float]] = {}
+    month_buckets: dict[str, dict[str, float]] = {}
+    totals = {"expense": 0.0, "income": 0.0, "count": 0}
+
+    today = datetime.date.today()
+    # Seed last `months` months in chronological order so the chart x-axis is
+    # complete even when some months have zero transactions.
+    seeded_months: list[str] = []
+    year, month = today.year, today.month
+    for _ in range(months):
+        seeded_months.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    seeded_months.reverse()
+    for m in seeded_months:
+        month_buckets[m] = {"expense": 0.0, "income": 0.0}
+
+    for row in rows:
+        padded = row + [""] * (7 - len(row))
+        date_str, _time, ttype, amount_str, _currency, category, _desc = padded[:7]
+        try:
+            amount = float(amount_str) if amount_str != "" else 0.0
+        except ValueError:
+            continue
+        if ttype not in ("Expense", "Income"):
+            continue
+        ttype_key = "expense" if ttype == "Expense" else "income"
+
+        # Category bucket — keyed by (category, type) so an "Other" expense
+        # never merges with an "Other" income.
+        cat_key = (category or "Uncategorized", ttype)
+        bucket = cat_buckets.setdefault(cat_key, {"amount": 0.0, "count": 0.0})
+        bucket["amount"] += amount
+        bucket["count"] += 1
+
+        # Month bucket — only count rows within the requested window.
+        if isinstance(date_str, str) and len(date_str) >= 7:
+            month_key = date_str[:7]
+            if month_key in month_buckets:
+                month_buckets[month_key][ttype_key] += amount
+
+        totals[ttype_key] += amount
+        totals["count"] += 1
+
+    by_category = [
+        {
+            "category": cat,
+            "type": ttype,
+            "amount": round(payload["amount"], 2),
+            "count": int(payload["count"]),
+        }
+        for (cat, ttype), payload in sorted(
+            cat_buckets.items(),
+            key=lambda kv: (-kv[1]["amount"], kv[0][0]),
+        )
+    ]
+
+    by_month = [
+        {
+            "month": m,
+            "expense": round(b["expense"], 2),
+            "income": round(b["income"], 2),
+            "balance": round(b["income"] - b["expense"], 2),
+        }
+        for m, b in month_buckets.items()
+    ]
+
+    return {
+        "by_category": by_category,
+        "by_month": by_month,
+        "totals": {
+            "expense": round(totals["expense"], 2),
+            "income": round(totals["income"], 2),
+            "balance": round(totals["income"] - totals["expense"], 2),
+            "count": int(totals["count"]),
+        },
+    }
 
 
 async def add_expense(

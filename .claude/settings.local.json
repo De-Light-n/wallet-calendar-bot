@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(pip show *)",
-      "Bash(npm uninstall *)"
+      "Bash(npm uninstall *)",
+      "Bash(npx tsc *)"
     ]
   }
 }

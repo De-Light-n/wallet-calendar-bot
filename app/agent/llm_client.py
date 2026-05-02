@@ -155,7 +155,12 @@ def _get_client() -> AsyncOpenAI:
 def _build_registry() -> ToolRegistry:
     """Register default tools for this assistant."""
     # Lazy import so tool modules can safely import DB models.
-    from app.tools.calendar_tool import create_calendar_event, list_upcoming_events
+    from app.tools.calendar_tool import (
+        create_calendar_event,
+        delete_event,
+        list_upcoming_events,
+        update_event,
+    )
     from app.tools.finance_tool import record_transaction
 
     registry = ToolRegistry()
@@ -206,6 +211,83 @@ def _build_registry() -> ToolRegistry:
                 "required": ["title", "start_datetime", "end_datetime"],
             },
             executor=create_calendar_event,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="update_event",
+            description=(
+                "Updates an existing Google Calendar event. Pass event_id "
+                "(retrieved via list_upcoming_events) plus only the fields to "
+                "change. To move time, BOTH start_datetime and end_datetime "
+                "must be provided in the same format as create_calendar_event."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "event_id": {
+                        "type": "string",
+                        "description": (
+                            "Google Calendar event id, obtained from "
+                            "list_upcoming_events."
+                        ),
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "New event title (optional).",
+                    },
+                    "start_datetime": {
+                        "type": "string",
+                        "description": (
+                            "New start. 'YYYY-MM-DDTHH:MM:SS' (timed, in user "
+                            "timezone) or 'YYYY-MM-DD' (all-day). Must match "
+                            "the format of end_datetime."
+                        ),
+                    },
+                    "end_datetime": {
+                        "type": "string",
+                        "description": (
+                            "New end. Same format as start_datetime. Required "
+                            "when changing time."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "New description (optional).",
+                    },
+                    "location": {
+                        "type": "string",
+                        "description": "New location (optional).",
+                    },
+                },
+                "required": ["event_id"],
+            },
+            executor=update_event,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="delete_event",
+            description=(
+                "Cancels a Google Calendar event. The event goes to Google's "
+                "Trash and can be restored within 30 days from Calendar UI. "
+                "Use list_upcoming_events first to find the right event_id, "
+                "and confirm with the user when there is any ambiguity about "
+                "which event to remove."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "event_id": {
+                        "type": "string",
+                        "description": (
+                            "Google Calendar event id from list_upcoming_events."
+                        ),
+                    },
+                },
+                "required": ["event_id"],
+            },
+            executor=delete_event,
         )
     )
     registry.register(
@@ -328,8 +410,10 @@ async def run_agent(
     ]
 
     correlation_id = context.correlation_id if context else None
+    channel = context.channel if context else "?"
     logger.info(
-        "run_agent: user_id=%s correlation_id=%s tz=%s message_len=%s model=%s",
+        "run_agent: channel=%s user_id=%s correlation_id=%s tz=%s message_len=%s model=%s",
+        channel,
         user_id,
         correlation_id,
         prompt_timezone,
@@ -349,7 +433,8 @@ async def run_agent(
         )
     except Exception as exc:
         logger.exception(
-            "run_agent: first LLM call failed (user_id=%s): %s",
+            "run_agent: first LLM call failed | channel=%s user_id=%s: %s",
+            channel,
             user_id,
             exc,
         )
@@ -362,14 +447,16 @@ async def run_agent(
     tool_calls = message.tool_calls or []
     if tool_calls:
         logger.info(
-            "run_agent: model requested %s tool call(s): %s (user_id=%s)",
+            "run_agent: model requested %s tool call(s): %s | channel=%s user_id=%s",
             len(tool_calls),
             [tc.function.name for tc in tool_calls],
+            channel,
             user_id,
         )
     else:
         logger.info(
-            "run_agent: no tool calls — direct answer (user_id=%s, content_len=%s)",
+            "run_agent: no tool calls — direct answer | channel=%s user_id=%s content_len=%s",
+            channel,
             user_id,
             len(message.content or ""),
         )
@@ -381,8 +468,9 @@ async def run_agent(
             args = json.loads(tool_call.function.arguments)
         except json.JSONDecodeError as exc:
             logger.error(
-                "run_agent: invalid JSON in tool call args | user_id=%s tool=%s "
+                "run_agent: invalid JSON in tool call args | channel=%s user_id=%s tool=%s "
                 "raw_args=%r error=%s",
+                channel,
                 user_id,
                 func_name,
                 tool_call.function.arguments,
@@ -400,8 +488,9 @@ async def run_agent(
             continue
 
         logger.info(
-            "run_agent: executing tool=%s (user_id=%s, args=%s)",
+            "run_agent: executing tool=%s | channel=%s user_id=%s args=%s",
             func_name,
+            channel,
             user_id,
             args,
         )
@@ -414,7 +503,8 @@ async def run_agent(
             )
         except Exception as exc:
             logger.exception(
-                "run_agent: tool execution raised | user_id=%s tool=%s: %s",
+                "run_agent: tool execution raised | channel=%s user_id=%s tool=%s: %s",
+                channel,
                 user_id,
                 func_name,
                 exc,
@@ -429,9 +519,10 @@ async def run_agent(
             tool_result_payload = {"status": "ok", "data": tool_result}
 
         logger.info(
-            "run_agent: tool=%s result_status=%s (user_id=%s)",
+            "run_agent: tool=%s result_status=%s | channel=%s user_id=%s",
             func_name,
             tool_result_payload.get("status"),
+            channel,
             user_id,
         )
         executed_tool_results.append((func_name, tool_result_payload))
@@ -454,7 +545,8 @@ async def run_agent(
             )
         except Exception as exc:
             logger.exception(
-                "run_agent: second LLM call (after tools) failed | user_id=%s: %s",
+                "run_agent: second LLM call (after tools) failed | channel=%s user_id=%s: %s",
+                channel,
                 user_id,
                 exc,
             )
@@ -468,7 +560,8 @@ async def run_agent(
             return _render_llm_error(exc)
         final_content = final_response.choices[0].message.content or ""
         logger.info(
-            "run_agent: final answer ready (user_id=%s, content_len=%s)",
+            "run_agent: final answer ready | channel=%s user_id=%s content_len=%s",
+            channel,
             user_id,
             len(final_content),
         )

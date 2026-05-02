@@ -280,6 +280,232 @@ def _to_rfc3339(value: str) -> str:
     return f"{value}Z"
 
 
+def _build_time_range(
+    *,
+    start_datetime: str,
+    end_datetime: str,
+    user_tz: str,
+) -> tuple[dict[str, Any], dict[str, Any], bool] | dict[str, Any]:
+    """Parse a (start, end) pair into Google Calendar's `start`/`end` shape.
+
+    Returns either ``(start_block, end_block, is_all_day)`` on success, or an
+    error dict ``{"status": "error", "error": "..."}`` on failure. Mirrors the
+    semantics used by ``create_calendar_event``: same format on both sides
+    (timed/timed or date-only/date-only), and end is bumped past start when
+    they would otherwise collapse.
+    """
+    is_all_day = _is_date_only(start_datetime)
+    if is_all_day != _is_date_only(end_datetime):
+        return {
+            "status": "error",
+            "error": (
+                "start_datetime and end_datetime must use the same format "
+                "(both YYYY-MM-DD for all-day, or both YYYY-MM-DDTHH:MM:SS for timed)."
+            ),
+        }
+
+    if is_all_day:
+        try:
+            start_date = datetime.date.fromisoformat(start_datetime)
+            end_date = datetime.date.fromisoformat(end_datetime)
+        except ValueError as exc:
+            return {"status": "error", "error": f"Invalid all-day date: {exc}"}
+        if end_date <= start_date:
+            end_date = start_date + datetime.timedelta(days=1)
+        return (
+            {"date": start_date.isoformat()},
+            {"date": end_date.isoformat()},
+            True,
+        )
+
+    try:
+        start_dt = datetime.datetime.fromisoformat(start_datetime)
+        end_dt = datetime.datetime.fromisoformat(end_datetime)
+    except ValueError as exc:
+        return {"status": "error", "error": f"Invalid datetime: {exc}"}
+    if end_dt <= start_dt:
+        end_dt = start_dt + datetime.timedelta(hours=1)
+    return (
+        {"dateTime": start_dt.isoformat(), "timeZone": user_tz},
+        {"dateTime": end_dt.isoformat(), "timeZone": user_tz},
+        False,
+    )
+
+
+async def update_event(
+    db: Session,
+    event_id: str,
+    title: str | None = None,
+    start_datetime: str | None = None,
+    end_datetime: str | None = None,
+    description: str | None = None,
+    location: str | None = None,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+) -> dict[str, Any]:
+    """Patch an existing Google Calendar event. All fields except event_id are optional.
+
+    To change the time, BOTH start_datetime and end_datetime must be provided
+    (Google rejects half-updates that mismatch the existing event's all-day vs
+    timed format). Other fields can be updated independently.
+    """
+    logger.info(
+        "update_event called | user_id=%s event_id=%s has_title=%s has_time=%s "
+        "has_description=%s has_location=%s",
+        user_id,
+        event_id,
+        title is not None,
+        start_datetime is not None or end_datetime is not None,
+        description is not None,
+        location is not None,
+    )
+
+    if not event_id:
+        return {"status": "error", "error": "event_id is required."}
+
+    creds = _get_credentials(db, user_id=user_id, telegram_id=telegram_id)
+    if not creds:
+        return {
+            "status": "error",
+            "error": (
+                "Google Calendar is not connected. "
+                "Please authorize via the web interface first."
+            ),
+        }
+
+    user = _resolve_user(db, user_id=user_id, telegram_id=telegram_id)
+    user_tz = user.timezone if user and user.timezone else _DEFAULT_TIMEZONE
+
+    body: dict[str, Any] = {}
+
+    if title is not None:
+        body["summary"] = title
+    if description is not None:
+        body["description"] = description
+    if location is not None:
+        body["location"] = location
+
+    # Time updates require BOTH endpoints, otherwise the result would mix
+    # all-day and timed fields and Google would reject or silently corrupt the
+    # event. This is safer than trying to fetch-then-patch.
+    if start_datetime is not None or end_datetime is not None:
+        if start_datetime is None or end_datetime is None:
+            return {
+                "status": "error",
+                "error": (
+                    "To change time, provide BOTH start_datetime and end_datetime."
+                ),
+            }
+        parsed = _build_time_range(
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+            user_tz=user_tz,
+        )
+        if isinstance(parsed, dict):
+            return parsed
+        start_block, end_block, _is_all_day = parsed
+        body["start"] = start_block
+        body["end"] = end_block
+
+    if not body:
+        return {
+            "status": "error",
+            "error": (
+                "Nothing to update. Pass at least one of: title, "
+                "start_datetime+end_datetime, description, location."
+            ),
+        }
+
+    try:
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        updated = execute_with_retry(
+            service.events().patch(
+                calendarId="primary",
+                eventId=event_id,
+                body=body,
+            ),
+            label="calendar.events.patch",
+        )
+        logger.info(
+            "Calendar event updated | user_id=%s event_id=%s fields=%s",
+            user_id,
+            event_id,
+            sorted(body.keys()),
+        )
+        return {
+            "status": "ok",
+            "event_id": updated.get("id", event_id),
+            "event_link": updated.get("htmlLink", ""),
+            "updated_fields": sorted(body.keys()),
+        }
+    except Exception as exc:
+        logger.exception(
+            "Calendar patch failed for user_id=%s event_id=%s: %s",
+            user_id,
+            event_id,
+            exc,
+        )
+        return {"status": "error", "error": str(exc)}
+
+
+async def delete_event(
+    db: Session,
+    event_id: str,
+    user_id: int | None = None,
+    telegram_id: int | None = None,
+) -> dict[str, Any]:
+    """Move a Google Calendar event to Trash (auto-restorable for 30 days).
+
+    Google's `events.delete` doesn't permanently remove — it sets status to
+    "cancelled" and the event sits in the user's trash for 30 days. That's our
+    safety net against mis-recognised voice commands ("видали" vs "віддали")
+    and LLM picking the wrong event by query.
+    """
+    logger.info(
+        "delete_event called | user_id=%s event_id=%s",
+        user_id,
+        event_id,
+    )
+
+    if not event_id:
+        return {"status": "error", "error": "event_id is required."}
+
+    creds = _get_credentials(db, user_id=user_id, telegram_id=telegram_id)
+    if not creds:
+        return {
+            "status": "error",
+            "error": (
+                "Google Calendar is not connected. "
+                "Please authorize via the web interface first."
+            ),
+        }
+
+    try:
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        execute_with_retry(
+            service.events().delete(calendarId="primary", eventId=event_id),
+            label="calendar.events.delete",
+        )
+        logger.info(
+            "Calendar event deleted (sent to Trash) | user_id=%s event_id=%s",
+            user_id,
+            event_id,
+        )
+        return {
+            "status": "ok",
+            "event_id": event_id,
+            "note": "Event moved to Google Calendar Trash (auto-restored within 30 days).",
+        }
+    except Exception as exc:
+        logger.exception(
+            "Calendar delete failed for user_id=%s event_id=%s: %s",
+            user_id,
+            event_id,
+            exc,
+        )
+        return {"status": "error", "error": str(exc)}
+
+
 async def list_upcoming_events(
     db: Session,
     user_id: int,

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ThemeToggle } from '../theme/ThemeToggle'
 import './UserHeader.css'
@@ -11,10 +12,10 @@ export function UserHeader() {
   return (
     <header className="user-header">
       <div className="user-header__inner">
-        <a href="/" className="brand">
+        <Link to="/" className="brand">
           <span className="brand__logo" aria-hidden="true">💼</span>
           <span className="brand__name">WalletCalBot</span>
-        </a>
+        </Link>
 
         <div className="user-header__actions">
           <ThemeToggle />

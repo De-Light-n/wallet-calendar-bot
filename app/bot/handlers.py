@@ -174,7 +174,7 @@ async def handle_text(message: Message) -> None:
 
     text = message.text or ""
     logger.info(
-        "Incoming text | telegram_id=%s username=%s message_id=%s len=%s",
+        "Telegram text | telegram_id=%s username=%s message_id=%s len=%s",
         telegram_id,
         username,
         message.message_id,
@@ -227,7 +227,7 @@ async def handle_voice(message: Message) -> None:
 
     voice = message.voice
     logger.info(
-        "Incoming voice | telegram_id=%s username=%s message_id=%s "
+        "Telegram voice | telegram_id=%s username=%s message_id=%s "
         "duration=%s file_size=%s mime=%s",
         telegram_id,
         username,

@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.database.models import User
 from app.database.session import get_db
 from app.tools.calendar_tool import list_upcoming_events
-from app.tools.finance_tool import list_recent_transactions
+from app.tools.finance_tool import list_recent_transactions, summarize_transactions
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -88,6 +88,16 @@ async def get_recent_transactions(
     return {"items": items, "spreadsheet_url": spreadsheet_url}
 
 
+@router.get("/me/finance/summary")
+async def get_finance_summary(
+    months: int = Query(default=12, ge=1, le=36),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Aggregated finance data for charts: per-category and per-month totals."""
+    return await summarize_transactions(db, user_id=user.id, months=months)
+
+
 @router.get("/me/calendar/upcoming")
 async def get_upcoming_events(
     limit: int = Query(default=10, ge=1, le=50),
@@ -95,6 +105,29 @@ async def get_upcoming_events(
     db: Session = Depends(get_db),
 ) -> dict:
     result = await list_upcoming_events(db, user_id=user.id, limit=limit)
+    return {"items": result.get("events", [])}
+
+
+@router.get("/me/calendar/range")
+async def get_calendar_range(
+    from_: str = Query(alias="from"),
+    to: str = Query(...),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Events between two dates for a month grid view.
+
+    `from` / `to` are inclusive YYYY-MM-DD strings. Calendar uses [start, end)
+    semantics, so we keep this client-friendly and let list_upcoming_events
+    handle the timezone conversion.
+    """
+    result = await list_upcoming_events(
+        db,
+        user_id=user.id,
+        limit=250,
+        time_min=from_,
+        time_max=to,
+    )
     return {"items": result.get("events", [])}
 
 
