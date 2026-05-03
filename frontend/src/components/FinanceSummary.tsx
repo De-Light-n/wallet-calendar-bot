@@ -39,6 +39,7 @@ interface SummaryResponse {
     balance: number
     count: number
   }
+  base_currency: string
 }
 
 // Tailwind-ish palette tuned to look distinct on both light & dark themes.
@@ -101,6 +102,7 @@ export function FinanceSummary() {
   const expenseCategories = data.by_category.filter((c) => c.type === 'Expense')
   const hasMonthly = data.by_month.some((m) => m.expense > 0 || m.income > 0)
   const hasCategories = expenseCategories.length > 0
+  const baseCurrency = data.base_currency || 'UAH'
   const monthlyData = data.by_month.map((m) => ({
     ...m,
     label: formatMonthLabel(m.month),
@@ -110,11 +112,11 @@ export function FinanceSummary() {
     <>
       <section className="kpi-grid">
         <article className="kpi-card kpi-card--expense">
-          <div className="kpi-card__label">Витрати (за весь час)</div>
+          <div className="kpi-card__label">Витрати ({baseCurrency})</div>
           <div className="kpi-card__value">{formatMoney(data.totals.expense)}</div>
         </article>
         <article className="kpi-card kpi-card--income">
-          <div className="kpi-card__label">Доходи</div>
+          <div className="kpi-card__label">Доходи ({baseCurrency})</div>
           <div className="kpi-card__value">{formatMoney(data.totals.income)}</div>
         </article>
         <article
@@ -122,7 +124,7 @@ export function FinanceSummary() {
             data.totals.balance >= 0 ? 'kpi-card--income' : 'kpi-card--expense'
           }`}
         >
-          <div className="kpi-card__label">Баланс</div>
+          <div className="kpi-card__label">Баланс ({baseCurrency})</div>
           <div className="kpi-card__value">
             {data.totals.balance >= 0 ? '+' : ''}
             {formatMoney(data.totals.balance)}
@@ -135,9 +137,10 @@ export function FinanceSummary() {
       </section>
 
       <section className="card chart-card">
-        <h2>📈 Витрати vs Доходи (12 міс.)</h2>
+        <h2>📈 Витрати vs Доходи (12 міс., {baseCurrency})</h2>
         <p className="card-subtitle">
-          Помісячний розріз. Місяці без транзакцій залишаються пустими.
+          Помісячний розріз у твоїй базовій валюті. Місяці без транзакцій
+          залишаються пустими.
         </p>
         {hasMonthly ? (
           <div className="chart-wrap">
@@ -181,7 +184,9 @@ export function FinanceSummary() {
 
       <section className="card chart-card">
         <h2>🥧 Витрати по категоріях</h2>
-        <p className="card-subtitle">За весь час (тільки expense-категорії)</p>
+        <p className="card-subtitle">
+          За весь час, у {baseCurrency} (тільки expense-категорії)
+        </p>
         {hasCategories ? (
           <div className="chart-wrap chart-wrap--pie">
             <ResponsiveContainer width="100%" height="100%">

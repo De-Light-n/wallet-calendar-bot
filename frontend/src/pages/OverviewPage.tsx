@@ -1,4 +1,5 @@
 import { useAuth } from '../auth/AuthContext'
+import { ChatPanel } from '../components/ChatPanel'
 import { RecentTransactions } from '../components/RecentTransactions'
 import { UpcomingEvents } from '../components/UpcomingEvents'
 
@@ -8,27 +9,18 @@ export function OverviewPage() {
 
   return (
     <>
-      <section className="page-hero">
-        <div>
-          <p className="page-hero__eyebrow">Особистий кабінет</p>
-          <h1 className="page-hero__title">Привіт, {firstName}! 👋</h1>
-          <p className="page-hero__lead">
-            Підключи канали, налаштуй часовий пояс і керуй фінансами та
-            розкладом просто з повідомлень.
-          </p>
-        </div>
-        {user?.google_spreadsheet_id && (
-          <a
-            className="page-hero__cta"
-            href={`https://docs.google.com/spreadsheets/d/${user.google_spreadsheet_id}/edit`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <span aria-hidden="true">📊</span>
-            <span>Відкрити Google Sheet</span>
-          </a>
-        )}
+      <section className="overview-hero">
+        <p className="overview-hero__eyebrow">Особистий асистент</p>
+        <h1 className="overview-hero__title">
+          Привіт, <span className="overview-hero__name">{firstName}</span>! 👋
+        </h1>
+        <p className="overview-hero__lead">
+          Пиши природною мовою — я запишу витрату, створю подію в календарі або
+          покажу те, що вже там є. Працює і тут, і в Telegram, Slack, Discord.
+        </p>
       </section>
+
+      <ChatPanel />
 
       <div className="page-grid">
         <div className="page-grid__col">

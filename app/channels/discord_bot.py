@@ -27,6 +27,7 @@ from app.database.session import SessionLocal
 logger = logging.getLogger(__name__)
 
 _LINK_PREFIX = "/link"
+_CURRENCY_PREFIX = "/currency"
 # Strips a leading `<@123456789>` mention so the agent doesn't see itself addressed.
 _MENTION_PATTERN = re.compile(r"^<@!?\d+>\s*")
 
@@ -95,6 +96,10 @@ async def _handle_message(client: discord.Client, message: discord.Message) -> N
 
     if text.lower().startswith(_LINK_PREFIX):
         await _handle_link_command(message=message, text=text)
+        return
+
+    if text.lower().startswith(_CURRENCY_PREFIX):
+        await _handle_currency_command(message=message, text=text)
         return
 
     # Defer the heavy LLM import until first message so module import is fast.
@@ -167,6 +172,72 @@ async def _handle_link_command(*, message: discord.Message, text: str) -> None:
         message,
         f"✅ Discord підключено до акаунта **{label}**.\n"
         "Тепер пиши мені в DM або тегни в каналі — я запишу витрату чи створю подію.",
+    )
+
+
+async def _handle_currency_command(*, message: discord.Message, text: str) -> None:
+    """Handle '/currency [CODE]' DM/mention command."""
+    from app.database.models import ChannelAccount
+    from app.integrations.fx import (
+        SUPPORTED_BASE_CURRENCIES,
+        is_supported_base_currency,
+    )
+
+    parts = text.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    supported = ", ".join(SUPPORTED_BASE_CURRENCIES)
+    external_user_id = str(message.author.id)
+
+    with SessionLocal() as db:
+        account = (
+            db.query(ChannelAccount)
+            .filter_by(channel="discord", external_user_id=external_user_id)
+            .first()
+        )
+        user = account.user if account else None
+
+        if not arg:
+            current = user.base_currency if user else "UAH"
+            await _safe_reply(
+                message,
+                f"Поточна базова валюта: **{current}**\n"
+                f"Підтримувані: {supported}\n"
+                "Зміни так: `/currency USD`",
+            )
+            return
+
+        code = arg.upper()
+        if not is_supported_base_currency(code):
+            await _safe_reply(
+                message,
+                f"❌ Валюта **{code}** не підтримується.\nПідтримувані: {supported}",
+            )
+            return
+
+        if user is None:
+            await _safe_reply(
+                message,
+                "Спочатку прив'яжи акаунт: згенеруй код на сайті, "
+                "потім напиши `/link ABC123XY`.",
+            )
+            return
+
+        previous = user.base_currency
+        if previous == code:
+            await _safe_reply(message, f"Базова валюта вже **{code}**.")
+            return
+
+        user.base_currency = code
+        db.commit()
+        logger.info(
+            "Discord /currency change | user_id=%s %s->%s", user.id, previous, code
+        )
+
+    await _safe_reply(
+        message,
+        f"✅ Базова валюта тепер **{code}** (було **{previous}**).\n"
+        "Нові транзакції будуть конвертуватись у цю валюту. "
+        "Щоб переключити Google-таблицю — натисни `/new_sheet`.",
     )
 
 

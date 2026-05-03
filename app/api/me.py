@@ -1,6 +1,7 @@
 """Authenticated dashboard API: link codes, transactions, calendar, settings."""
 from __future__ import annotations
 
+import logging
 import zoneinfo
 
 import os
@@ -13,10 +14,12 @@ from app.auth.link_codes import generate_link_code
 from app.core.config import settings
 from app.database.models import User
 from app.database.session import get_db
+from app.integrations.fx import SUPPORTED_BASE_CURRENCIES, is_supported_base_currency
 from app.tools.calendar_tool import list_upcoming_events
 from app.tools.finance_tool import list_recent_transactions, summarize_transactions
 
 router = APIRouter(prefix="/api", tags=["api"])
+logger = logging.getLogger(__name__)
 
 _LINK_SUPPORTED_CHANNELS = {"telegram", "slack", "discord"}
 
@@ -131,6 +134,96 @@ async def get_calendar_range(
     return {"items": result.get("events", [])}
 
 
+@router.get("/me/base-currency")
+async def get_base_currency(
+    user: User = Depends(current_user),
+) -> dict:
+    """Return the user's chosen base currency + the list of supported codes."""
+    return {
+        "base_currency": user.base_currency,
+        "supported": list(SUPPORTED_BASE_CURRENCIES),
+    }
+
+
+@router.put("/me/base-currency")
+async def update_base_currency(
+    payload: dict = Body(...),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Change the user's base currency.
+
+    Doesn't touch existing transactions — old rows keep whatever Base Amount
+    was frozen at write time. New transactions will convert into the new base.
+    To rewrite the entire ledger in the new currency, the user has to either
+    run /new_sheet or wait for the optional backfill script.
+    """
+    code = ((payload or {}).get("currency") or "").upper().strip()
+    if not is_supported_base_currency(code):
+        supported = ", ".join(SUPPORTED_BASE_CURRENCIES)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported currency: {code or '<empty>'}. Supported: {supported}",
+        )
+
+    previous = user.base_currency
+    user.base_currency = code
+    db.commit()
+    logger.info(
+        "Base currency changed | user_id=%s %s->%s", user.id, previous, code
+    )
+    return {"base_currency": user.base_currency, "previous": previous}
+
+
+@router.post("/me/chat")
+async def chat_with_agent(
+    payload: dict = Body(...),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Send a chat message to the AI agent (web frontend channel).
+
+    Bypasses the orchestrator's get_or_create_user_for_channel because the
+    user is already resolved via the session cookie — no need to spin up an
+    anonymous channel-account.
+    """
+    text = ((payload or {}).get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="`text` is required")
+    if len(text) > 4000:
+        raise HTTPException(status_code=400, detail="Message too long (max 4000 chars)")
+
+    # Lazy import to keep the API module light at startup.
+    from app.agent.llm_client import run_agent
+    from app.core.context import AgentRequestContext
+
+    context = AgentRequestContext(
+        channel="web",
+        external_user_id=str(user.id),
+        timezone=user.timezone or "UTC",
+    )
+    logger.info(
+        "Web chat | user_id=%s text_len=%s",
+        user.id,
+        len(text),
+    )
+    try:
+        response = await run_agent(
+            user_message=text,
+            user_id=user.id,
+            db_session=db,
+            context=context,
+        )
+    except Exception as exc:
+        logger.exception("Web chat agent run failed | user_id=%s: %s", user.id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Сталася помилка під час обробки. Спробуй ще раз.",
+        ) from exc
+
+    return {"response": response or "(порожня відповідь)"}
+
+
 @router.put("/me/timezone")
 async def update_timezone(
     payload: dict = Body(...),
@@ -145,6 +238,10 @@ async def update_timezone(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid timezone: {tz}") from exc
 
+    previous_tz = user.timezone
     user.timezone = tz
     db.commit()
+    logger.info(
+        "Timezone changed | user_id=%s %s->%s", user.id, previous_tz, tz
+    )
     return {"timezone": user.timezone}

@@ -4,6 +4,7 @@ import datetime
 from sqlalchemy import (
     BigInteger,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -33,7 +34,16 @@ class User(Base):
     email = Column(String(255), unique=True, index=True, nullable=True)
     picture_url = Column(Text, nullable=True)
     timezone = Column(String(64), nullable=False, default="UTC", server_default="UTC")
+    base_currency = Column(
+        String(8), nullable=False, default="UAH", server_default="UAH"
+    )
     google_spreadsheet_id = Column(String(128), nullable=True)
+    # Tracks the layout of the user's spreadsheet so old 7-column ledgers keep
+    # working while new ones are provisioned with the 9-column multi-currency
+    # schema. Bumped whenever _TRANSACTIONS_HEADER / dashboard formulas change.
+    spreadsheet_schema_version = Column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     oauth_token = relationship("OAuthToken", back_populates="user", uselist=False)
@@ -89,6 +99,27 @@ class Expense(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     user = relationship("User", back_populates="expenses")
+
+
+class ExchangeRate(Base):
+    """Per-day cache of FX rates fetched from NBU.
+
+    NBU quotes everything as "1 unit of <base> = <rate> UAH", so for our
+    purposes ``quote`` is always "UAH". We still store it as a column so the
+    schema can evolve to non-NBU sources later without a migration.
+    """
+
+    __tablename__ = "exchange_rates"
+    __table_args__ = (
+        UniqueConstraint("base", "quote", "as_of_date", name="uq_rate_per_day"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    base = Column(String(8), nullable=False, index=True)
+    quote = Column(String(8), nullable=False, default="UAH")
+    rate = Column(Float, nullable=False)
+    as_of_date = Column(Date, nullable=False, index=True)
+    fetched_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
 class LinkCode(Base):

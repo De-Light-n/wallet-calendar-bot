@@ -2,6 +2,46 @@
   max-width: 1200px;
   margin: 0 auto;
   padding: 32px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* Hero used on the Overview page — bigger, centered, with a soft gradient name. */
+.overview-hero {
+  text-align: center;
+  padding: 40px 16px 8px;
+}
+
+.overview-hero__eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+
+.overview-hero__title {
+  font-size: clamp(2rem, 5vw, 3rem);
+  letter-spacing: -0.025em;
+  line-height: 1.05;
+  margin: 0 0 14px;
+}
+
+.overview-hero__name {
+  background: linear-gradient(120deg, var(--accent), #ec4899 60%, #f59e0b);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.overview-hero__lead {
+  color: var(--text);
+  margin: 0 auto;
+  max-width: 600px;
+  line-height: 1.6;
+  font-size: 1.0625rem;
 }
 
 .page-hero {
@@ -10,7 +50,6 @@
   justify-content: space-between;
   gap: 24px;
   flex-wrap: wrap;
-  margin-bottom: 28px;
 }
 
 .page-hero__eyebrow {
@@ -88,11 +127,12 @@
 @media (max-width: 920px) {
   .app-main {
     padding: 24px 16px 48px;
+    gap: 20px;
   }
   .page-grid {
     grid-template-columns: 1fr;
   }
-  .page-hero {
-    margin-bottom: 20px;
+  .overview-hero {
+    padding: 16px 8px 0;
   }
 }

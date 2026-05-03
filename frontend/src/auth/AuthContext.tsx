@@ -15,7 +15,9 @@ export interface CurrentUser {
   full_name: string | null
   picture_url: string | null
   timezone: string
+  base_currency: string
   google_spreadsheet_id: string | null
+  spreadsheet_schema_version: number
   enabled_channels: string[]
   channels: ChannelLink[]
 }

@@ -101,9 +101,15 @@ _SHEET_TRANSACTIONS = "Transactions"
 _SHEET_MONTHLY = "Monthly"
 _SHEET_CATEGORIES = "Categories"
 
+# Bumped whenever the Transactions sheet layout / dashboard formulas change.
+# v1: 7 cols (Date..Description). v2: 9 cols with Base Amount + Base Currency.
+SPREADSHEET_SCHEMA_VERSION = 2
+
 _TRANSACTIONS_HEADER = [
     "Date", "Time", "Type", "Amount", "Currency", "Category", "Description",
+    "Base Amount", "Base Currency",
 ]
+_TRANSACTIONS_COL_COUNT = len(_TRANSACTIONS_HEADER)
 
 
 def _spreadsheet_url(spreadsheet_id: str) -> str:
@@ -144,7 +150,13 @@ def _build_spreadsheet_create_body(user: User) -> dict[str, Any]:
         },
         "sheets": [
             _sheet(_SHEET_DASHBOARD, index=0, rows=60, cols=12, color=(0.26, 0.52, 0.96)),
-            _sheet(_SHEET_TRANSACTIONS, index=1, rows=1000, cols=7, color=(0.18, 0.80, 0.44)),
+            _sheet(
+                _SHEET_TRANSACTIONS,
+                index=1,
+                rows=1000,
+                cols=_TRANSACTIONS_COL_COUNT,
+                color=(0.18, 0.80, 0.44),
+            ),
             _sheet(_SHEET_MONTHLY, index=2, rows=20, cols=5, color=(0.96, 0.65, 0.14)),
             _sheet(_SHEET_CATEGORIES, index=3, rows=50, cols=5, color=(0.91, 0.26, 0.21)),
         ],
@@ -154,13 +166,15 @@ def _build_spreadsheet_create_body(user: User) -> dict[str, Any]:
 def _dashboard_values() -> list[list[str]]:
     """Return rows for the Dashboard sheet (current-month + all-time metrics).
 
+    All sums read column H (Base Amount) so the dashboard is always in the
+    user's base currency, regardless of the original transaction currency.
     Formulas use ';' as argument separator to match the spreadsheet's uk_UA locale.
     """
     cm_start = "DATE(YEAR(TODAY());MONTH(TODAY());1)"
     cm_end = "EOMONTH(TODAY();0)"
 
     sumifs_cm = (
-        '=SUMIFS(Transactions!D:D;Transactions!C:C;"{ttype}";'
+        '=SUMIFS(Transactions!H:H;Transactions!C:C;"{ttype}";'
         f'Transactions!A:A;">="&{cm_start};Transactions!A:A;"<="&{cm_end})'
     )
     countifs_cm = (
@@ -172,23 +186,26 @@ def _dashboard_values() -> list[list[str]]:
         ["💰 Wallet Dashboard"],                                        # 1
         [""],                                                           # 2
         ["📊 Поточний місяць"],                                          # 3
-        ["Метрика", "Сума"],                                            # 4
+        ["Метрика", "Сума (base)"],                                     # 4
         ["Витрати", sumifs_cm.format(ttype="Expense")],                 # 5
         ["Доходи", sumifs_cm.format(ttype="Income")],                   # 6
         ["Баланс", "=B6-B5"],                                           # 7
         ["Кількість транзакцій", countifs_cm],                          # 8
         [""],                                                           # 9
         ["📈 За весь час"],                                              # 10
-        ["Метрика", "Сума"],                                            # 11
-        ["Витрати всього", '=SUMIF(Transactions!C:C;"Expense";Transactions!D:D)'],
-        ["Доходи всього", '=SUMIF(Transactions!C:C;"Income";Transactions!D:D)'],
+        ["Метрика", "Сума (base)"],                                     # 11
+        ["Витрати всього", '=SUMIF(Transactions!C:C;"Expense";Transactions!H:H)'],
+        ["Доходи всього", '=SUMIF(Transactions!C:C;"Income";Transactions!H:H)'],
         ["Баланс всього", "=B13-B12"],                                  # 14
         ["Транзакцій всього", "=MAX(0;COUNTA(Transactions!A:A)-1)"],    # 15
     ]
 
 
 def _monthly_values(months: int = 12) -> list[list[str]]:
-    """Rows for the Monthly sheet, ordered oldest→newest so charts read left-to-right."""
+    """Rows for the Monthly sheet, ordered oldest→newest so charts read left-to-right.
+
+    Sums read column H (Base Amount) so totals are in the user's base currency.
+    """
     rows: list[list[str]] = [["Місяць", "Витрати", "Доходи", "Баланс", "Кількість"]]
     # offset goes from (months-1) months ago down to 0 (current month)
     for sheet_row, offset in enumerate(range(months - 1, -1, -1), start=2):
@@ -196,11 +213,11 @@ def _monthly_values(months: int = 12) -> list[list[str]]:
         start = f"(EOMONTH(TODAY();{-offset - 1})+1)"
         end = f"EOMONTH(TODAY();{-offset})"
         expense = (
-            f'=SUMIFS(Transactions!D:D;Transactions!C:C;"Expense";'
+            f'=SUMIFS(Transactions!H:H;Transactions!C:C;"Expense";'
             f'Transactions!A:A;">="&{start};Transactions!A:A;"<="&{end})'
         )
         income = (
-            f'=SUMIFS(Transactions!D:D;Transactions!C:C;"Income";'
+            f'=SUMIFS(Transactions!H:H;Transactions!C:C;"Income";'
             f'Transactions!A:A;">="&{start};Transactions!A:A;"<="&{end})'
         )
         balance = f"=C{sheet_row}-B{sheet_row}"
@@ -213,13 +230,17 @@ def _monthly_values(months: int = 12) -> list[list[str]]:
 
 
 def _categories_values() -> list[list[str]]:
-    """Return rows for the Categories sheet (all-time totals per category)."""
+    """Return rows for the Categories sheet (all-time totals per category).
+
+    Sums read column H (Base Amount) so per-category totals are in the user's
+    base currency.
+    """
     rows: list[list[str]] = [["Категорія", "Тип", "Сума", "Кількість", "Середня"]]
     sheet_row = 2
     for tx_type in ("Expense", "Income"):
         for cat in sorted(ALLOWED_CATEGORIES[tx_type]):
             sum_f = (
-                f'=SUMIFS(Transactions!D:D;'
+                f'=SUMIFS(Transactions!H:H;'
                 f'Transactions!C:C;"{tx_type}";'
                 f'Transactions!F:F;"{cat}")'
             )
@@ -378,17 +399,18 @@ def _format_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
         ))
     requests.append(_autosize(dashboard_id, 6))
 
-    # === Transactions: header, date column, amount column ===
-    requests.append(_table_header(transactions_id, 7))
+    # === Transactions: header, date column, amount columns (D + H) ===
+    requests.append(_table_header(transactions_id, _TRANSACTIONS_COL_COUNT))
     requests.append(_repeat(
         _range(transactions_id, 1, 1000, 0, 1),
         {"numberFormat": {"type": "DATE", "pattern": "yyyy-mm-dd"}},
         "numberFormat",
     ))
-    requests.append(_currency_col(transactions_id, 3))
-    # Date | Time | Type | Amount | Currency | Category | Description
+    requests.append(_currency_col(transactions_id, 3))  # D: Amount
+    requests.append(_currency_col(transactions_id, 7))  # H: Base Amount
+    # Date | Time | Type | Amount | Currency | Category | Description | Base Amount | Base Currency
     requests.extend(_set_column_widths(
-        transactions_id, [110, 90, 110, 130, 100, 170, 320]
+        transactions_id, [110, 90, 110, 130, 100, 170, 280, 130, 110]
     ))
 
     # === Monthly: header + currency on cols B/C/D ===
@@ -577,7 +599,7 @@ def _create_user_spreadsheet(sheets_service: Any, user: User) -> str:
                 "values": _dashboard_values(),
             },
             {
-                "range": f"{_SHEET_TRANSACTIONS}!A1:G1",
+                "range": f"{_SHEET_TRANSACTIONS}!A1:I1",
                 "values": [_TRANSACTIONS_HEADER],
             },
             {
@@ -625,9 +647,10 @@ def _ensure_user_spreadsheet(
     """Return the user's spreadsheet, creating one if it doesn't exist yet."""
     if user.google_spreadsheet_id:
         logger.info(
-            "Reusing existing spreadsheet for user id=%s: spreadsheet_id=%s",
+            "Reusing existing spreadsheet for user id=%s: spreadsheet_id=%s schema_v=%s",
             user.id,
             user.google_spreadsheet_id,
+            getattr(user, "spreadsheet_schema_version", 1),
         )
         return user.google_spreadsheet_id
 
@@ -635,12 +658,14 @@ def _ensure_user_spreadsheet(
     spreadsheet_id = _create_user_spreadsheet(sheets_service, user)
 
     user.google_spreadsheet_id = spreadsheet_id
+    user.spreadsheet_schema_version = SPREADSHEET_SCHEMA_VERSION
     db.add(user)
     db.commit()
     db.refresh(user)
     logger.info(
-        "Saved spreadsheet_id=%s for user id=%s",
+        "Saved spreadsheet_id=%s schema_v=%s for user id=%s",
         spreadsheet_id,
+        SPREADSHEET_SCHEMA_VERSION,
         user.id,
     )
     return spreadsheet_id
@@ -650,12 +675,19 @@ def _append_transaction_row(
     sheets_service: Any,
     spreadsheet_id: str,
     row: list[Any],
+    *,
+    schema_version: int = SPREADSHEET_SCHEMA_VERSION,
 ) -> dict[str, Any]:
-    """Append a single transaction row to the user's Transactions sheet."""
+    """Append a single transaction row to the user's Transactions sheet.
+
+    Range adapts to schema_version so legacy v1 spreadsheets (7 columns) keep
+    working without ever touching columns H/I.
+    """
+    range_a1 = "Transactions!A:I" if schema_version >= 2 else "Transactions!A:G"
     return execute_with_retry(
         sheets_service.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
-            range="Transactions!A:G",
+            range=range_a1,
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": [row]},
@@ -711,6 +743,7 @@ async def reset_user_spreadsheet(
         return {"status": "error", "error": str(exc)}
 
     user.google_spreadsheet_id = new_id
+    user.spreadsheet_schema_version = SPREADSHEET_SCHEMA_VERSION
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -720,6 +753,7 @@ async def reset_user_spreadsheet(
         "old_spreadsheet_id": old_id,
         "spreadsheet_id": new_id,
         "spreadsheet_url": _spreadsheet_url(new_id),
+        "schema_version": SPREADSHEET_SCHEMA_VERSION,
     }
 
 
@@ -813,25 +847,71 @@ async def record_transaction(
         return {"status": "error", "error": str(exc)}
 
     now_utc = datetime.datetime.now(datetime.UTC)
-    row = [
+    normalized_currency = (currency or "UAH").upper()
+    base_currency = (getattr(user, "base_currency", None) or "UAH").upper()
+    schema_version = int(getattr(user, "spreadsheet_schema_version", 1) or 1)
+
+    base_amount: float | None = None
+    fx_warning: str | None = None
+    if schema_version >= 2:
+        # Compute the user's base-currency equivalent up front so the row written
+        # to Sheets contains a frozen number (column H), not a live formula.
+        # That keeps historical totals stable even when rates shift later.
+        from app.integrations.fx import FxError, convert as fx_convert
+
+        try:
+            base_amount = await fx_convert(
+                db,
+                amount=float(amount),
+                from_currency=normalized_currency,
+                to_currency=base_currency,
+                on_date=now_utc.date(),
+            )
+            base_amount = round(base_amount, 2)
+        except FxError as exc:
+            # Don't block the write — record the original currency only and let
+            # the user know base-currency aggregates may be off until rates
+            # come back. Better than dropping the transaction entirely.
+            fx_warning = (
+                f"Не вдалося отримати курс {normalized_currency}→{base_currency}: "
+                f"{exc}. Транзакція збережена, але без перерахунку у базову валюту."
+            )
+            logger.warning(
+                "FX conversion failed | user_id=%s %s→%s amount=%s: %s",
+                user.id,
+                normalized_currency,
+                base_currency,
+                amount,
+                exc,
+            )
+
+    row: list[Any] = [
         now_utc.date().isoformat(),
         now_utc.strftime("%H:%M:%S"),
         normalized_type,
         float(amount),
-        (currency or "UAH").upper(),
+        normalized_currency,
         category,
         description,
     ]
+    if schema_version >= 2:
+        row.extend([
+            base_amount if base_amount is not None else "",
+            base_currency,
+        ])
 
     logger.info(
-        "Appending row to spreadsheet_id=%s (user id=%s): %s",
+        "Appending row to spreadsheet_id=%s (user id=%s schema_v=%s): %s",
         spreadsheet_id,
         user.id,
+        schema_version,
         row,
     )
     sheets_service = build("sheets", "v4", credentials=creds, cache_discovery=False)
     try:
-        append_result = _append_transaction_row(sheets_service, spreadsheet_id, row)
+        append_result = _append_transaction_row(
+            sheets_service, spreadsheet_id, row, schema_version=schema_version
+        )
     except Exception as exc:
         if not is_spreadsheet_missing(exc):
             logger.exception(
@@ -855,7 +935,11 @@ async def record_transaction(
         db.refresh(user)
         try:
             spreadsheet_id = _ensure_user_spreadsheet(db, user=user, creds=creds)
-            append_result = _append_transaction_row(sheets_service, spreadsheet_id, row)
+            # Schema may have been bumped during recreate — re-read it before append.
+            schema_version = int(getattr(user, "spreadsheet_schema_version", 1) or 1)
+            append_result = _append_transaction_row(
+                sheets_service, spreadsheet_id, row, schema_version=schema_version
+            )
         except Exception as recreate_exc:
             logger.exception(
                 "Sheets recreate+append failed for user id=%s: %s",
@@ -877,17 +961,23 @@ async def record_transaction(
         spreadsheet_id,
         updated_range,
     )
-    return {
+    response: dict[str, Any] = {
         "status": "ok",
         "spreadsheet_id": spreadsheet_id,
         "spreadsheet_url": spreadsheet_url,
         "transaction_type": normalized_type,
         "amount": float(amount),
-        "currency": (currency or "UAH").upper(),
+        "currency": normalized_currency,
         "category": category,
         "description": description,
         "updated_range": updated_range,
     }
+    if base_amount is not None:
+        response["base_amount"] = base_amount
+        response["base_currency"] = base_currency
+    if fx_warning:
+        response["fx_warning"] = fx_warning
+    return response
 
 
 async def list_recent_transactions(
@@ -897,6 +987,10 @@ async def list_recent_transactions(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Read the last ``limit`` rows from the user's Transactions sheet.
+
+    Reads up to 9 columns (A:I). Legacy v1 spreadsheets only have A:G — the
+    extra columns are returned as None/empty so callers can still rely on the
+    new fields without crashing on old data.
 
     Returns an empty list if the user has not yet connected Google or no
     spreadsheet has been created (i.e. they have no recorded transactions).
@@ -914,7 +1008,7 @@ async def list_recent_transactions(
         result = execute_with_retry(
             service.spreadsheets().values().get(
                 spreadsheetId=user.google_spreadsheet_id,
-                range="Transactions!A2:G",
+                range="Transactions!A2:I",
             ),
             label="spreadsheets.values.get",
         )
@@ -930,11 +1024,15 @@ async def list_recent_transactions(
     rows = rows[-limit:] if limit else rows
     transactions: list[dict[str, Any]] = []
     for row in reversed(rows):
-        padded = row + [""] * (7 - len(row))
+        padded = row + [""] * (_TRANSACTIONS_COL_COUNT - len(row))
         try:
             amount = float(padded[3]) if padded[3] != "" else None
         except ValueError:
             amount = None
+        try:
+            base_amount = float(padded[7]) if padded[7] != "" else None
+        except ValueError:
+            base_amount = None
         transactions.append(
             {
                 "date": padded[0],
@@ -944,6 +1042,8 @@ async def list_recent_transactions(
                 "currency": padded[4],
                 "category": padded[5],
                 "description": padded[6],
+                "base_amount": base_amount,
+                "base_currency": padded[8] or None,
             }
         )
     return transactions
@@ -966,15 +1066,18 @@ async def summarize_transactions(
 
     Empty lists / zeros when the user has no spreadsheet, no oauth, or no rows.
     """
+    base_currency = "UAH"
+    user = _resolve_user(db, user_id=user_id)
     empty: dict[str, Any] = {
         "by_category": [],
         "by_month": [],
         "totals": {"expense": 0.0, "income": 0.0, "balance": 0.0, "count": 0},
+        "base_currency": base_currency,
     }
-
-    user = _resolve_user(db, user_id=user_id)
     if not user or not user.google_spreadsheet_id:
         return empty
+    base_currency = (getattr(user, "base_currency", None) or "UAH").upper()
+    empty["base_currency"] = base_currency
 
     creds = _get_google_credentials(db, user_id=user_id)
     if not creds:
@@ -985,7 +1088,7 @@ async def summarize_transactions(
         result = execute_with_retry(
             service.spreadsheets().values().get(
                 spreadsheetId=user.google_spreadsheet_id,
-                range="Transactions!A2:G",
+                range="Transactions!A2:I",
             ),
             label="spreadsheets.values.get",
         )
@@ -1019,10 +1122,21 @@ async def summarize_transactions(
         month_buckets[m] = {"expense": 0.0, "income": 0.0}
 
     for row in rows:
-        padded = row + [""] * (7 - len(row))
-        date_str, _time, ttype, amount_str, _currency, category, _desc = padded[:7]
+        padded = row + [""] * (_TRANSACTIONS_COL_COUNT - len(row))
+        date_str, _time, ttype, amount_str, _currency, category, _desc, base_amount_str, _base_cur = (
+            padded[:_TRANSACTIONS_COL_COUNT]
+        )
+        # Prefer Base Amount (col H) so totals are always in user's base
+        # currency. Legacy v1 rows have it empty — fall back to raw Amount;
+        # accuracy degrades gracefully instead of silently dropping the row.
+        amount: float
         try:
-            amount = float(amount_str) if amount_str != "" else 0.0
+            if base_amount_str != "":
+                amount = float(base_amount_str)
+            elif amount_str != "":
+                amount = float(amount_str)
+            else:
+                continue
         except ValueError:
             continue
         if ttype not in ("Expense", "Income"):
@@ -1077,6 +1191,7 @@ async def summarize_transactions(
             "balance": round(totals["income"] - totals["expense"], 2),
             "count": int(totals["count"]),
         },
+        "base_currency": base_currency,
     }
 
 

@@ -16,6 +16,7 @@ from app.bot.utils import download_telegram_file
 from app.core.config import settings
 from app.core.context import AgentRequestContext
 from app.database.session import SessionLocal
+from app.integrations.fx import SUPPORTED_BASE_CURRENCIES, is_supported_base_currency
 from app.tools.finance_tool import reset_user_spreadsheet
 
 router = Router()
@@ -113,6 +114,64 @@ async def handle_link(message: Message) -> None:
     await message.answer(
         f"✅ Telegram підключено до акаунта <b>{user.email or user.full_name or 'твого профілю'}</b>.\n\n"
         "Тепер пиши, що купив або яку зустріч додати — я все зроблю.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("currency"))
+async def handle_currency(message: Message) -> None:
+    """Change the user's base currency. Usage: /currency USD"""
+    from app.database.models import User
+
+    telegram_id = message.from_user.id
+    parts = (message.text or "").split(maxsplit=1)
+    supported = ", ".join(SUPPORTED_BASE_CURRENCIES)
+
+    if len(parts) < 2 or not parts[1].strip():
+        with SessionLocal() as db:
+            user = db.query(User).filter_by(telegram_id=telegram_id).first()
+            current = user.base_currency if user else "UAH"
+        await message.answer(
+            "Базова валюта — це те, в чому показуються підсумки в дашборді.\n\n"
+            f"Зараз: <b>{current}</b>\n"
+            f"Підтримувані: {supported}\n\n"
+            "Зміни так: <code>/currency USD</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    code = parts[1].strip().upper()
+    if not is_supported_base_currency(code):
+        await message.answer(
+            f"❌ Валюта <b>{code}</b> не підтримується.\nПідтримувані: {supported}",
+            parse_mode="HTML",
+        )
+        return
+
+    with SessionLocal() as db:
+        user = db.query(User).filter_by(telegram_id=telegram_id).first()
+        if user is None:
+            await message.answer("Спочатку напиши /start щоб зареєструватись.")
+            return
+        previous = user.base_currency
+        user.base_currency = code
+        db.commit()
+
+    if previous == code:
+        await message.answer(f"Базова валюта вже <b>{code}</b>.", parse_mode="HTML")
+        return
+
+    logger.info(
+        "/currency change: telegram_id=%s %s->%s",
+        telegram_id,
+        previous,
+        code,
+    )
+    await message.answer(
+        f"✅ Базова валюта тепер <b>{code}</b> (було <b>{previous}</b>).\n\n"
+        "Нові транзакції будуть конвертуватись у цю валюту.\n"
+        "Щоб переключити і поточну Google-таблицю — натисни /new_sheet "
+        "(стара залишиться в Drive).",
         parse_mode="HTML",
     )
 

@@ -163,7 +163,9 @@ async def auth_me(user: User = Depends(current_user)) -> dict:
         "full_name": user.full_name,
         "picture_url": user.picture_url,
         "timezone": user.timezone,
+        "base_currency": user.base_currency,
         "google_spreadsheet_id": user.google_spreadsheet_id,
+        "spreadsheet_schema_version": user.spreadsheet_schema_version,
         "enabled_channels": list(settings.enabled_channels),
         "channels": [
             {

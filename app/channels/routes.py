@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # ─── Slack ────────────────────────────────────────────────────────────────────
 
 _SLACK_LINK_PREFIX = "/link"
+_SLACK_CURRENCY_PREFIX = "/currency"
 
 
 @router.post("/slack/webhook")
@@ -125,6 +126,14 @@ async def _handle_slack_message(
         )
         return
 
+    if text.lower().startswith(_SLACK_CURRENCY_PREFIX):
+        await _handle_slack_currency(
+            text=text,
+            external_user_id=external_user_id,
+            slack_channel_id=slack_channel_id,
+        )
+        return
+
     with SessionLocal() as db:
         from app.core.context import AgentRequestContext
 
@@ -199,6 +208,89 @@ async def _handle_slack_link(
         text=(
             f"✅ Slack підключено до акаунта *{label}*.\n"
             "Тепер пиши мені в DM або тегни в каналі — я запишу витрату чи створю подію."
+        ),
+    )
+
+
+async def _handle_slack_currency(
+    *,
+    text: str,
+    external_user_id: str,
+    slack_channel_id: str,
+) -> None:
+    """Handle '/currency [CODE]' as a special command (no LLM hop).
+
+    With no argument: shows current setting + supported list.
+    With argument: validates and updates user.base_currency.
+    """
+    from app.database.models import ChannelAccount, User
+    from app.integrations.fx import (
+        SUPPORTED_BASE_CURRENCIES,
+        is_supported_base_currency,
+    )
+
+    parts = text.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    supported = ", ".join(SUPPORTED_BASE_CURRENCIES)
+
+    with SessionLocal() as db:
+        account = (
+            db.query(ChannelAccount)
+            .filter_by(channel="slack", external_user_id=external_user_id)
+            .first()
+        )
+        user = account.user if account else None
+
+        if not arg:
+            current = user.base_currency if user else "UAH"
+            await slack_post_message(
+                channel=slack_channel_id,
+                text=(
+                    f"Поточна базова валюта: *{current}*\n"
+                    f"Підтримувані: {supported}\n"
+                    "Зміни так: `/currency USD`"
+                ),
+            )
+            return
+
+        code = arg.upper()
+        if not is_supported_base_currency(code):
+            await slack_post_message(
+                channel=slack_channel_id,
+                text=f"❌ Валюта *{code}* не підтримується.\nПідтримувані: {supported}",
+            )
+            return
+
+        if user is None:
+            await slack_post_message(
+                channel=slack_channel_id,
+                text=(
+                    "Спочатку прив'яжи акаунт: згенеруй код на сайті, "
+                    "потім напиши `/link ABC123XY`."
+                ),
+            )
+            return
+
+        previous = user.base_currency
+        if previous == code:
+            await slack_post_message(
+                channel=slack_channel_id,
+                text=f"Базова валюта вже *{code}*.",
+            )
+            return
+
+        user.base_currency = code
+        db.commit()
+        logger.info(
+            "Slack /currency change | user_id=%s %s->%s", user.id, previous, code
+        )
+
+    await slack_post_message(
+        channel=slack_channel_id,
+        text=(
+            f"✅ Базова валюта тепер *{code}* (було *{previous}*).\n"
+            "Нові транзакції будуть конвертуватись у цю валюту. "
+            "Щоб переключити Google-таблицю — натисни `/new_sheet`."
         ),
     )
 

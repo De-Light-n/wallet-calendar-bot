@@ -6,6 +6,32 @@
 
 ## 1. Multi-currency support із зведенням до базової валюти користувача
 
+### Що вже зроблено (PR1 + PR2)
+
+- ✅ Модель `ExchangeRate` (`base, quote, as_of_date` UNIQUE) + поле `User.base_currency` (default `UAH`).
+- ✅ Поле `User.spreadsheet_schema_version` (default 1) + runtime-міграція в `init_db()`.
+- ✅ FX-клієнт [app/integrations/fx.py](app/integrations/fx.py): NBU API + lookback на вихідні + per-day кеш у БД. `convert()` робить cross-конверсію через UAH.
+- ✅ 11 тестів на FX (cache hit/miss, lookback, convert all directions).
+- ✅ Schema v2 у Sheets: 9 колонок (`Date | Time | Type | Amount | Currency | Category | Description | Base Amount | Base Currency`).
+- ✅ Dashboard / Monthly / Categories формули перенесені на колонку H — підсумки завжди в базовій валюті юзера.
+- ✅ `record_transaction` обчислює `base_amount` через FX перед append. На `FxError` пише без конвертації + повертає `fx_warning` у відповіді (graceful degradation).
+- ✅ Сумісність: існуючі юзери з v1 spreadsheet (7 cols) продовжують працювати без змін. Нові юзери і ті хто запустить `/new_sheet` отримують v2 з повним мульти-валютним стеком.
+- ✅ `list_recent_transactions` + `summarize_transactions` читають A:I, повертають `base_amount` / `base_currency`. Для legacy v1 рядків fallback на оригінальний `amount` (точність кульгає, але не падає).
+
+### Що залишилось
+
+1. **Команда `/currency USD`** для боту — UPDATE `users.base_currency`. Попередження юзеру: "нові транзакції будуть конвертуватись у USD; старі залишаться як є — натисни `/new_sheet` щоб таблиця теж переключилась". Простий handler у `app/bot/handlers.py` + аналогічно для Slack/Discord (треба подумати чи дублювати, чи через generic `/link`-стиль).
+2. **Frontend**: dropdown "Базова валюта" у Settings page (`PUT /api/me/base-currency` endpoint + UI). + лейбл "₴/$" біля сум на `/finance` — щоб не було плутанини коли в базовій валюті USD, а в Sheets рядки UAH.
+3. **Backfill-скрипт** `app/scripts/backfill_base_amount.py` — для юзерів які мали v1 Sheets з купою UAH-рядків і хочуть переключитись на USD/EUR base. Пройти кожен рядок, узяти курс на дату рядка через `get_or_fetch_rate`, переписати колонку H. Запускати вручну, з `--dry-run` спочатку.
+4. **(опц.)** Auto-bump: при ловлі v1 spreadsheet → автоматично пропонувати `/new_sheet` через бот ("у тебе стара структура таблиці, оновити?"). Ризик: юзер може хотіти зберегти стару — тому опитування, а не магія.
+5. **(опц.)** Background scheduler для проактивного оновлення курсів — не критично, lazy-fetch з кешем покриває ~всі випадки.
+
+### Що НЕ робилося в PR1+PR2
+
+- Назви категорій залишаються англійською (це окрема задача — i18n).
+- Старі рядки в існуючих v1 Sheets не перераховуються на льоту (треба backfill).
+- `record_transaction` response містить `fx_warning` коли FX не дзвонить — але LLM його не бачить як окрему гілку. Можливо варто додати в system prompt інструкцію "якщо `fx_warning` — згадай юзеру в reply".
+
 ### Що хочемо
 
 - Кожна транзакція пишеться у валюті як зараз (`Amount`, `Currency`).
@@ -60,7 +86,7 @@ base_currency = Column(String(8), nullable=False, default="UAH", server_default=
 #### Фоновий sync
 
 Варіанти:
-- **APScheduler** в тому ж процесі що FastAPI — найпростіше, але не запускається з `python bot.py` (бот окремо).
+- **APScheduler** в тому ж процесі що FastAPI — найпростіше, працює і на проді і локально (тепер усі канали в одному uvicorn-процесі).
 - **Окремий тригер `python -m app.scripts.sync_rates`** + cron / systemd-timer / GitHub Actions — для production-хостингу.
 - **Lazy на запит**: при `record_transaction` перевіряти, чи є курс на сьогодні; якщо нема — тягнути синхронно. Найпростіше для початку, без додаткової інфраструктури.
 
@@ -158,32 +184,25 @@ else:
 
 ## 3. Майбутнє масштабування channel-runners (NOT NOW)
 
-### Що вже зроблено
+### Поточний стан: один процес
 
-Discord gateway стартує **тільки в `bot.py`** — раніше дублювався і в `app/main.py`, що породжувало race на `/link` (обидва процеси одночасно ловили подію → один обробляв успішно, другий ловив `LinkCodeError` "вже використано"). Видалили з `main.py` — тепер чистий розподіл:
+Все стартує через `uvicorn app.main:app`:
+- HTTP API + frontend
+- Slack webhook
+- Discord gateway (як background asyncio.Task)
+- Telegram — webhook на проді (з валідним `WEBHOOK_URL`) або long-polling як background task локально
 
-| Файл | Що тримає | Коли запускати |
-|------|-----------|----------------|
-| `app/main.py` (uvicorn) | HTTP-only: Telegram webhook (prod), Slack webhook, frontend API | Завжди (prod + local) |
-| `bot.py` | Persistent connections: Telegram polling (dev), Discord gateway | Local-dev окремо; prod — окремий процес/контейнер |
-
-На проді треба запускати обидва процеси (як systemd unit + worker, або Fly.io `[processes]` секцією, або Docker compose з двома сервісами). Документувати в `docs/hosting.md` коли він з'явиться.
+`bot.py` видалений; окремого worker-процесу немає. Раніше Discord стартував у двох місцях паралельно (uvicorn + bot.py) → race на `/link`. Колапс назад в один процес знімає проблему природно — клієнт один.
 
 ### Майбутнє масштабування (NOT NOW)
 
-Поки одного процесу uvicorn (для HTTP) + одного `bot.py` (для gateway) досить до ~10к юзерів. Реальний bottleneck — LLM-API rate limits, не FastAPI. Розділяти на 4 окремі сервіси (один на канал) — **не треба**, це підриває можливість безкоштовного хостингу і не дає виграшу при цьому навантаженні.
+Одного процесу досить до ~10к активних юзерів. Реальний bottleneck — LLM-API rate limits, не FastAPI. Розділяти на канально-окремі сервіси — не треба, це підриває можливість безкоштовного хостингу і не дає виграшу при цьому навантаженні.
 
 Коли реально перевалить за 10к активних — тоді робиться:
 - HTTP layer (uvicorn) ← N replicas за load balancer
-- Discord gateway ← 1 instance (gateway не масштабується горизонтально)
+- Discord gateway ← винести в окремий процес з 1 інстансом (gateway не масштабується горизонтально). На цей момент знадобиться вернутись до концепції runner-скрипта, але вже свідомо.
 - LLM-job queue (Celery/RQ + Redis) ← N workers, щоб HTTP-handler'и не блокувались на 2-5с виклику моделі
 
 Поки про це не думати.
-
-### Етапи
-
-1. Дотестувати поточний стан (Discord працює в DM + у каналі по mention; `/link` приймає код).
-2. PR: видалити Discord start/stop з `app/main.py`.
-3. (Опц.) `docs/hosting.md` — оновити секцію про процеси на проді: окремий gateway-worker.
 
 ---

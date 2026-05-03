@@ -116,7 +116,7 @@ ENABLED_CHANNELS=telegram,slack
 ## Перевірка
 
 ```bash
-# Backend має бути запущений як FastAPI app, не як bot.py
+# Запускає весь стек: HTTP API, Telegram (polling/webhook), Slack webhook, Discord gateway.
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 

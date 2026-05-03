@@ -3,7 +3,10 @@
     "allow": [
       "Bash(pip show *)",
       "Bash(npm uninstall *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_fx.py -q)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

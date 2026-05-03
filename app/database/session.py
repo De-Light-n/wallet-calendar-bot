@@ -42,6 +42,8 @@ def init_db() -> None:
         ("email", "VARCHAR(255)"),
         ("picture_url", "TEXT"),
         ("timezone", "VARCHAR(64) NOT NULL DEFAULT 'UTC'"),
+        ("base_currency", "VARCHAR(8) NOT NULL DEFAULT 'UAH'"),
+        ("spreadsheet_schema_version", "INTEGER NOT NULL DEFAULT 1"),
     ]
     with engine.begin() as conn:
         for col_name, col_type in new_user_columns:

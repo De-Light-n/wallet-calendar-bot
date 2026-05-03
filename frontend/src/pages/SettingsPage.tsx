@@ -1,4 +1,5 @@
 import { useAuth } from '../auth/AuthContext'
+import { BaseCurrencySetting } from '../components/BaseCurrencySetting'
 import { ConnectDiscord } from '../components/ConnectDiscord'
 import { ConnectSlack } from '../components/ConnectSlack'
 import { ConnectTelegram } from '../components/ConnectTelegram'
@@ -28,6 +29,7 @@ export function SettingsPage() {
         </div>
         <div className="page-grid__col">
           <TimezoneSetting />
+          <BaseCurrencySetting />
         </div>
       </div>
     </>

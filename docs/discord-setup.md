@@ -80,26 +80,23 @@ ENABLED_CHANNELS=telegram,slack,discord
 
 ---
 
-## Крок 6. Запустити бот (коли буде Gateway-реалізація)
+## Крок 6. Запустити бот
 
-> Цей розділ — preview. Реальної реалізації Gateway-клієнта ще нема в коді. Коли буде, бот стартуватиме окремим процесом (як `bot.py` для Telegram), створюючи постійне WebSocket-з'єднання.
+Discord gateway-клієнт інтегрований у [app/main.py](../app/main.py) і стартує
+разом з рештою сервісів. Окремого runner-скрипта немає.
 
-Очікувана команда:
 ```bash
-.venv\Scripts\python.exe -m app.channels.discord_runner
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Після запуску бот стане **online** на сервері. Юзер пише в DM боту або тегає `@bot` у каналі — бот відповідає.
+В логах має з'явитись:
+```
+INFO  app.channels.discord_bot: Discord bot starting…
+INFO  app.channels.discord_bot: Discord bot connected | id=... name=Wallet Calendar Bot guilds=1
+```
 
----
-
-## Що робити прямо зараз
-
-Поки Gateway-реалізації немає, ти можеш:
-
-1. **Підготувати credentials** (виконати кроки 1-4) — токен лежить у .env і чекає
-2. **Голосувати за пріоритет** — додати рядок у [TODO.md](../TODO.md) секція 3+ що Discord потрібен раніше, ніж інші фічі
-3. **Альтернативно — використати Slack як головний канал** на час впровадження
+На сервері бот стане **online** (зелений індикатор). Пиши в DM або тегай
+`@bot` у каналі куди він запрошений — отримаєш відповідь.
 
 ---
 
