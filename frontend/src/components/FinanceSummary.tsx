@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -43,19 +45,24 @@ interface SummaryResponse {
 }
 
 // Tailwind-ish palette tuned to look distinct on both light & dark themes.
-const PIE_COLORS = [
+// Expense pie leans warm (red→orange→yellow); income pie leans cool (green→teal→blue)
+// so the two charts read differently at a glance.
+const EXPENSE_COLORS = [
   '#ef4444',
   '#f97316',
   '#f59e0b',
   '#eab308',
-  '#84cc16',
+  '#a855f7',
+  '#ec4899',
+  '#fb7185',
+]
+
+const INCOME_COLORS = [
   '#22c55e',
   '#10b981',
   '#06b6d4',
   '#3b82f6',
   '#8b5cf6',
-  '#d946ef',
-  '#ec4899',
 ]
 
 function formatMoney(n: number): string {
@@ -100,13 +107,24 @@ export function FinanceSummary() {
   }
 
   const expenseCategories = data.by_category.filter((c) => c.type === 'Expense')
+  const incomeCategories = data.by_category.filter((c) => c.type === 'Income')
   const hasMonthly = data.by_month.some((m) => m.expense > 0 || m.income > 0)
-  const hasCategories = expenseCategories.length > 0
+  const hasExpenseCats = expenseCategories.length > 0
+  const hasIncomeCats = incomeCategories.length > 0
   const baseCurrency = data.base_currency || 'UAH'
   const monthlyData = data.by_month.map((m) => ({
     ...m,
     label: formatMonthLabel(m.month),
   }))
+
+  // Running cumulative balance — each point = sum of all monthly balances
+  // up to and including that month. Shows wealth trajectory over time, not
+  // just the per-month delta the bar chart already covers.
+  let runningTotal = 0
+  const cumulativeData = monthlyData.map((m) => {
+    runningTotal += m.balance
+    return { label: m.label, cumulative: Math.round(runningTotal * 100) / 100 }
+  })
 
   return (
     <>
@@ -183,30 +201,35 @@ export function FinanceSummary() {
       </section>
 
       <section className="card chart-card">
-        <h2>🥧 Витрати по категоріях</h2>
+        <h2>📉 Накопичувальний баланс ({baseCurrency})</h2>
         <p className="card-subtitle">
-          За весь час, у {baseCurrency} (тільки expense-категорії)
+          Сума балансів за всі місяці підряд. Іде вгору коли заробляєш більше
+          ніж витрачаєш, вниз — навпаки.
         </p>
-        {hasCategories ? (
-          <div className="chart-wrap chart-wrap--pie">
+        {hasMonthly ? (
+          <div className="chart-wrap">
             <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={expenseCategories}
-                  dataKey="amount"
-                  nameKey="category"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={110}
-                  label={({ name, percent }) =>
-                    `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
-                  }
-                  labelLine={false}
-                >
-                  {expenseCategories.map((_, i) => (
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
+              <AreaChart
+                data={cumulativeData}
+                margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+              >
+                <defs>
+                  <linearGradient id="cumulFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4} />
+                    <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis
+                  dataKey="label"
+                  stroke="var(--text-muted)"
+                  tick={{ fontSize: 12 }}
+                />
+                <YAxis
+                  stroke="var(--text-muted)"
+                  tick={{ fontSize: 12 }}
+                  width={60}
+                />
                 <Tooltip
                   contentStyle={{
                     background: 'var(--surface)',
@@ -218,13 +241,111 @@ export function FinanceSummary() {
                     typeof v === 'number' ? formatMoney(v) : String(v)
                   }
                 />
-              </PieChart>
+                <Area
+                  type="monotone"
+                  dataKey="cumulative"
+                  name="Кумулятивний баланс"
+                  stroke="#3b82f6"
+                  fill="url(#cumulFill)"
+                  strokeWidth={2}
+                />
+              </AreaChart>
             </ResponsiveContainer>
           </div>
         ) : (
-          <div className="empty">Поки немає витрат по категоріях.</div>
+          <div className="empty">Поки немає даних.</div>
         )}
       </section>
+
+      <div className="charts-pair">
+        <section className="card chart-card">
+          <h2>🥧 Витрати по категоріях</h2>
+          <p className="card-subtitle">
+            За весь час, у {baseCurrency}
+          </p>
+          {hasExpenseCats ? (
+            <div className="chart-wrap chart-wrap--pie">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={expenseCategories}
+                    dataKey="amount"
+                    nameKey="category"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={100}
+                    label={({ name, percent }) =>
+                      `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
+                    }
+                    labelLine={false}
+                  >
+                    {expenseCategories.map((_, i) => (
+                      <Cell key={i} fill={EXPENSE_COLORS[i % EXPENSE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-h)',
+                    }}
+                    formatter={(v) =>
+                      typeof v === 'number' ? formatMoney(v) : String(v)
+                    }
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="empty">Поки немає витрат.</div>
+          )}
+        </section>
+
+        <section className="card chart-card">
+          <h2>💚 Доходи по категоріях</h2>
+          <p className="card-subtitle">
+            За весь час, у {baseCurrency}
+          </p>
+          {hasIncomeCats ? (
+            <div className="chart-wrap chart-wrap--pie">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={incomeCategories}
+                    dataKey="amount"
+                    nameKey="category"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={100}
+                    label={({ name, percent }) =>
+                      `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
+                    }
+                    labelLine={false}
+                  >
+                    {incomeCategories.map((_, i) => (
+                      <Cell key={i} fill={INCOME_COLORS[i % INCOME_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--text-h)',
+                    }}
+                    formatter={(v) =>
+                      typeof v === 'number' ? formatMoney(v) : String(v)
+                    }
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="empty">Поки немає доходів.</div>
+          )}
+        </section>
+      </div>
     </>
   )
 }

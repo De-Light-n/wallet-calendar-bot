@@ -16,7 +16,12 @@ from app.database.models import User
 from app.database.session import get_db
 from app.integrations.fx import SUPPORTED_BASE_CURRENCIES, is_supported_base_currency
 from app.tools.calendar_tool import list_upcoming_events
-from app.tools.finance_tool import list_recent_transactions, summarize_transactions
+from app.tools.finance_tool import (
+    list_recent_transactions,
+    recalculate_base_amounts,
+    reset_user_spreadsheet,
+    summarize_transactions,
+)
 
 router = APIRouter(prefix="/api", tags=["api"])
 logger = logging.getLogger(__name__)
@@ -172,7 +177,19 @@ async def update_base_currency(
     logger.info(
         "Base currency changed | user_id=%s %s->%s", user.id, previous, code
     )
-    return {"base_currency": user.base_currency, "previous": previous}
+
+    # Recompute every existing row's Base Amount + Base Currency in-place,
+    # using each row's own date for the FX rate. Skipped automatically for v1
+    # spreadsheets (no col H/I to write to). No-op when nothing changed.
+    recalc: dict | None = None
+    if previous != code and user.google_spreadsheet_id:
+        recalc = await recalculate_base_amounts(db, user_id=user.id)
+
+    return {
+        "base_currency": user.base_currency,
+        "previous": previous,
+        "recalculation": recalc,
+    }
 
 
 @router.post("/me/chat")
@@ -222,6 +239,30 @@ async def chat_with_agent(
         ) from exc
 
     return {"response": response or "(порожня відповідь)"}
+
+
+@router.post("/me/spreadsheet/reset")
+async def reset_spreadsheet(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Provision a fresh Google Spreadsheet for the user.
+
+    The previous spreadsheet stays in the user's Drive — we never auto-delete
+    user data. The new sheet uses the latest layout (v2: 9 cols + multi-month
+    Dashboard). Useful when:
+    - User changed base_currency and wants the entire ledger in the new one.
+    - Layout / formulas were updated in code (e.g. new dashboard sections).
+    - The current spreadsheet got into a weird state.
+    """
+    logger.info("Spreadsheet reset requested | user_id=%s", user.id)
+    result = await reset_user_spreadsheet(db, user_id=user.id)
+    if result.get("status") != "ok":
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("error", "Не вдалося створити нову таблицю."),
+        )
+    return result
 
 
 @router.put("/me/timezone")

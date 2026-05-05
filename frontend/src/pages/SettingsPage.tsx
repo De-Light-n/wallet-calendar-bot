@@ -3,6 +3,7 @@ import { BaseCurrencySetting } from '../components/BaseCurrencySetting'
 import { ConnectDiscord } from '../components/ConnectDiscord'
 import { ConnectSlack } from '../components/ConnectSlack'
 import { ConnectTelegram } from '../components/ConnectTelegram'
+import { SpreadsheetActions } from '../components/SpreadsheetActions'
 import { TimezoneSetting } from '../components/TimezoneSetting'
 
 export function SettingsPage() {
@@ -30,6 +31,7 @@ export function SettingsPage() {
         <div className="page-grid__col">
           <TimezoneSetting />
           <BaseCurrencySetting />
+          <SpreadsheetActions />
         </div>
       </div>
     </>

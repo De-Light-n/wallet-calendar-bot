@@ -96,6 +96,34 @@ def _normalize_transaction_type(transaction_type: str) -> str | None:
 # Spreadsheet provisioning (built from scratch, no Drive copy required)
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Google Sheets stores dates as days since 1899-12-30 (matches Excel). With
+# valueRenderOption=UNFORMATTED_VALUE + dateTimeRenderOption=SERIAL_NUMBER we
+# get this number back regardless of the spreadsheet's locale, instead of a
+# locale-specific string like "04.05.2026" that breaks naive prefix parsing.
+_SHEETS_DATE_EPOCH = datetime.date(1899, 12, 30)
+
+
+def _parse_sheets_date(value: Any) -> datetime.date | None:
+    """Convert a Sheets cell value to datetime.date.
+
+    Accepts a serial-number int/float (the unformatted form), an ISO string
+    "YYYY-MM-DD" (raw-input legacy rows), or a uk_UA locale string
+    "DD.MM.YYYY". Returns None when nothing parses.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return _SHEETS_DATE_EPOCH + datetime.timedelta(days=int(value))
+        except (OverflowError, ValueError):
+            return None
+    if isinstance(value, str) and value:
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+            try:
+                return datetime.datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
+    return None
+
+
 _SHEET_DASHBOARD = "Dashboard"
 _SHEET_TRANSACTIONS = "Transactions"
 _SHEET_MONTHLY = "Monthly"
@@ -142,9 +170,15 @@ def _build_spreadsheet_create_body(user: User) -> dict[str, Any]:
             }
         }
 
+    # Friendly title — owner sees this in Drive. Falls back to a neutral label
+    # if neither full_name nor email is available (e.g. user came in via a
+    # messaging channel without web OAuth yet).
+    owner_label = (user.full_name or user.email or "мій бюджет").strip()
+    title = f"Wallet Ledger — {owner_label}"
+
     return {
         "properties": {
-            "title": f"Wallet Ledger - user-{user.id}",
+            "title": title,
             "locale": "uk_UA",
             "timeZone": user_tz,
         },
@@ -164,7 +198,7 @@ def _build_spreadsheet_create_body(user: User) -> dict[str, Any]:
 
 
 def _dashboard_values() -> list[list[str]]:
-    """Return rows for the Dashboard sheet (current-month + all-time metrics).
+    """Return rows for the Dashboard sheet (current + previous month + all-time).
 
     All sums read column H (Base Amount) so the dashboard is always in the
     user's base currency, regardless of the original transaction currency.
@@ -172,32 +206,44 @@ def _dashboard_values() -> list[list[str]]:
     """
     cm_start = "DATE(YEAR(TODAY());MONTH(TODAY());1)"
     cm_end = "EOMONTH(TODAY();0)"
+    pm_start = "DATE(YEAR(EOMONTH(TODAY();-1));MONTH(EOMONTH(TODAY();-1));1)"
+    pm_end = "EOMONTH(TODAY();-1)"
 
-    sumifs_cm = (
-        '=SUMIFS(Transactions!H:H;Transactions!C:C;"{ttype}";'
-        f'Transactions!A:A;">="&{cm_start};Transactions!A:A;"<="&{cm_end})'
-    )
-    countifs_cm = (
-        f'=COUNTIFS(Transactions!A:A;">="&{cm_start};'
-        f'Transactions!A:A;"<="&{cm_end})'
-    )
+    def _sumifs(start: str, end: str, ttype: str) -> str:
+        return (
+            f'=SUMIFS(Transactions!H:H;Transactions!C:C;"{ttype}";'
+            f'Transactions!A:A;">="&{start};Transactions!A:A;"<="&{end})'
+        )
+
+    def _countifs(start: str, end: str) -> str:
+        return (
+            f'=COUNTIFS(Transactions!A:A;">="&{start};'
+            f'Transactions!A:A;"<="&{end})'
+        )
 
     return [
         ["💰 Wallet Dashboard"],                                        # 1
         [""],                                                           # 2
         ["📊 Поточний місяць"],                                          # 3
         ["Метрика", "Сума (base)"],                                     # 4
-        ["Витрати", sumifs_cm.format(ttype="Expense")],                 # 5
-        ["Доходи", sumifs_cm.format(ttype="Income")],                   # 6
+        ["Витрати", _sumifs(cm_start, cm_end, "Expense")],              # 5
+        ["Доходи", _sumifs(cm_start, cm_end, "Income")],                # 6
         ["Баланс", "=B6-B5"],                                           # 7
-        ["Кількість транзакцій", countifs_cm],                          # 8
+        ["Кількість транзакцій", _countifs(cm_start, cm_end)],          # 8
         [""],                                                           # 9
-        ["📈 За весь час"],                                              # 10
+        ["📅 Минулий місяць"],                                           # 10
         ["Метрика", "Сума (base)"],                                     # 11
+        ["Витрати", _sumifs(pm_start, pm_end, "Expense")],              # 12
+        ["Доходи", _sumifs(pm_start, pm_end, "Income")],                # 13
+        ["Баланс", "=B13-B12"],                                         # 14
+        ["Кількість транзакцій", _countifs(pm_start, pm_end)],          # 15
+        [""],                                                           # 16
+        ["📈 За весь час"],                                              # 17
+        ["Метрика", "Сума (base)"],                                     # 18
         ["Витрати всього", '=SUMIF(Transactions!C:C;"Expense";Transactions!H:H)'],
         ["Доходи всього", '=SUMIF(Transactions!C:C;"Income";Transactions!H:H)'],
-        ["Баланс всього", "=B13-B12"],                                  # 14
-        ["Транзакцій всього", "=MAX(0;COUNTA(Transactions!A:A)-1)"],    # 15
+        ["Баланс всього", "=B20-B19"],                                  # 21
+        ["Транзакцій всього", "=MAX(0;COUNTA(Transactions!A:A)-1)"],    # 22
     ]
 
 
@@ -363,8 +409,10 @@ def _format_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
             "fields": "pixelSize",
         }
     })
-    # Subtitle bands (Поточний місяць / За весь час)
-    for r in (2, 9):
+    # Subtitle bands (Поточний місяць / Минулий місяць / За весь час) —
+    # 0-indexed rows where the subtitle title sits.
+    subtitle_rows = (2, 9, 16)
+    for r in subtitle_rows:
         requests.append({
             "mergeCells": {
                 "range": _range(dashboard_id, r, r + 1, 0, 6),
@@ -379,14 +427,17 @@ def _format_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
             },
             "backgroundColor,textFormat",
         ))
-    # Metric blocks: rows 4..8 and 11..15 (1-based) — column A bold, column B currency
-    for hdr_row in (3, 10):  # 0-indexed Метрика|Сума header
+    # 0-indexed rows of "Метрика | Сума (base)" headers.
+    metric_header_rows = (3, 10, 17)
+    for hdr_row in metric_header_rows:
         requests.append(_repeat(
             _range(dashboard_id, hdr_row, hdr_row + 1, 0, 2),
             {"backgroundColor": header_bg, "textFormat": {"bold": True}},
             "backgroundColor,textFormat",
         ))
-    for r0, r1 in ((4, 8), (11, 15)):
+    # 0-indexed half-open ranges per metric block (inclusive start, exclusive end).
+    metric_blocks = ((4, 8), (11, 15), (18, 22))
+    for r0, r1 in metric_blocks:
         requests.append(_repeat(
             _range(dashboard_id, r0, r1, 0, 1),
             {"textFormat": {"bold": True}},
@@ -488,7 +539,7 @@ def _chart_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
                         "series": _src(categories_id, expense_start, expense_end, 2, 3),
                     },
                 },
-                "position": _overlay(row_idx=16, col_idx=0, w=480, h=340),
+                "position": _overlay(row_idx=23, col_idx=0, w=480, h=340),
             }
         }
     }
@@ -523,7 +574,7 @@ def _chart_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
                         ],
                     },
                 },
-                "position": _overlay(row_idx=16, col_idx=6, w=640, h=340),
+                "position": _overlay(row_idx=23, col_idx=6, w=640, h=340),
             }
         }
     }
@@ -554,7 +605,7 @@ def _chart_requests(sheet_ids: dict[str, int]) -> list[dict[str, Any]]:
                         ],
                     },
                 },
-                "position": _overlay(row_idx=35, col_idx=0, w=1140, h=320),
+                "position": _overlay(row_idx=42, col_idx=0, w=1140, h=320),
             }
         }
     }
@@ -595,7 +646,7 @@ def _create_user_spreadsheet(sheets_service: Any, user: User) -> str:
         "valueInputOption": "USER_ENTERED",
         "data": [
             {
-                "range": f"{_SHEET_DASHBOARD}!A1:B15",
+                "range": f"{_SHEET_DASHBOARD}!A1:B22",
                 "values": _dashboard_values(),
             },
             {
@@ -1009,6 +1060,12 @@ async def list_recent_transactions(
             service.spreadsheets().values().get(
                 spreadsheetId=user.google_spreadsheet_id,
                 range="Transactions!A2:I",
+                # uk_UA locale uses ',' as decimal — without UNFORMATTED_VALUE
+                # the API returns "350,00" which float() rejects, dropping every row.
+                # SERIAL_NUMBER for dates dodges the locale "DD.MM.YYYY" issue;
+                # we parse the raw serial via _parse_sheets_date below.
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="SERIAL_NUMBER",
             ),
             label="spreadsheets.values.get",
         )
@@ -1027,16 +1084,20 @@ async def list_recent_transactions(
         padded = row + [""] * (_TRANSACTIONS_COL_COUNT - len(row))
         try:
             amount = float(padded[3]) if padded[3] != "" else None
-        except ValueError:
+        except (TypeError, ValueError):
             amount = None
         try:
             base_amount = float(padded[7]) if padded[7] != "" else None
-        except ValueError:
+        except (TypeError, ValueError):
             base_amount = None
+        # Sheets returned a serial number for the date — convert back to ISO
+        # so the frontend can render it without knowing about Sheets internals.
+        date = _parse_sheets_date(padded[0])
+        date_iso = date.isoformat() if date else (str(padded[0]) if padded[0] != "" else "")
         transactions.append(
             {
-                "date": padded[0],
-                "time": padded[1],
+                "date": date_iso,
+                "time": str(padded[1]) if padded[1] != "" else "",
                 "type": padded[2],
                 "amount": amount,
                 "currency": padded[4],
@@ -1047,6 +1108,164 @@ async def list_recent_transactions(
             }
         )
     return transactions
+
+
+async def recalculate_base_amounts(
+    db: Session,
+    *,
+    user_id: int,
+) -> dict[str, Any]:
+    """Rewrite columns H (Base Amount) + I (Base Currency) in-place.
+
+    Used when the user changes their base_currency: instead of leaving the
+    historical ledger expressed in the old base, we re-convert every row using
+    the rate of *its own* date (not today's). This preserves the same
+    fixed-at-write-time semantics record_transaction uses for new rows.
+
+    Returns counts: ``{"updated": N, "skipped": N, "fx_failures": N}``.
+    No-op for v1 spreadsheets — they don't have columns H/I.
+    """
+    user = _resolve_user(db, user_id=user_id)
+    if not user or not user.google_spreadsheet_id:
+        return {"status": "ok", "updated": 0, "skipped": 0, "fx_failures": 0}
+
+    schema_version = int(getattr(user, "spreadsheet_schema_version", 1) or 1)
+    if schema_version < 2:
+        return {
+            "status": "skipped",
+            "reason": "spreadsheet_v1_has_no_base_columns",
+            "updated": 0,
+            "skipped": 0,
+            "fx_failures": 0,
+        }
+
+    creds = _get_google_credentials(db, user_id=user_id)
+    if not creds:
+        return {"status": "error", "error": "Google account not connected"}
+
+    base_currency = (getattr(user, "base_currency", None) or "UAH").upper()
+
+    try:
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        result = execute_with_retry(
+            service.spreadsheets().values().get(
+                spreadsheetId=user.google_spreadsheet_id,
+                range="Transactions!A2:I",
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="SERIAL_NUMBER",
+            ),
+            label="spreadsheets.values.get",
+        )
+    except Exception as exc:
+        logger.exception(
+            "recalculate_base_amounts: read failed | user_id=%s: %s",
+            user_id,
+            exc,
+        )
+        return {"status": "error", "error": str(exc)}
+
+    rows = result.get("values", []) or []
+    if not rows:
+        return {"status": "ok", "updated": 0, "skipped": 0, "fx_failures": 0}
+
+    from app.integrations.fx import FxError, convert as fx_convert
+
+    updates: list[dict[str, Any]] = []
+    skipped = 0
+    fx_failures = 0
+
+    for idx, row in enumerate(rows):
+        padded = row + [""] * (_TRANSACTIONS_COL_COUNT - len(row))
+        date_val, _time, ttype, amount_val, currency_val, *_rest = padded[:5]
+
+        date = _parse_sheets_date(date_val)
+        if date is None or ttype not in ("Expense", "Income"):
+            skipped += 1
+            continue
+
+        try:
+            amount = float(amount_val)
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+
+        currency = (str(currency_val) or "UAH").upper().strip() or "UAH"
+
+        try:
+            new_base = await fx_convert(
+                db,
+                amount=amount,
+                from_currency=currency,
+                to_currency=base_currency,
+                on_date=date,
+            )
+            new_base = round(new_base, 2)
+        except FxError as exc:
+            logger.warning(
+                "recalculate: FX fail | user_id=%s row=%s %s->%s on %s: %s",
+                user_id,
+                idx + 2,
+                currency,
+                base_currency,
+                date,
+                exc,
+            )
+            fx_failures += 1
+            continue
+
+        # Sheet rows are 1-indexed and row 1 is the header → idx + 2.
+        sheet_row = idx + 2
+        updates.append({
+            "range": f"Transactions!H{sheet_row}:I{sheet_row}",
+            "values": [[new_base, base_currency]],
+        })
+
+    if not updates:
+        logger.info(
+            "Recalculate: nothing to write | user_id=%s skipped=%s fx_failures=%s",
+            user_id,
+            skipped,
+            fx_failures,
+        )
+        return {
+            "status": "ok",
+            "updated": 0,
+            "skipped": skipped,
+            "fx_failures": fx_failures,
+            "base_currency": base_currency,
+        }
+
+    try:
+        execute_with_retry(
+            service.spreadsheets().values().batchUpdate(
+                spreadsheetId=user.google_spreadsheet_id,
+                body={"valueInputOption": "USER_ENTERED", "data": updates},
+            ),
+            label="spreadsheets.values.batchUpdate(recalculate)",
+        )
+    except Exception as exc:
+        logger.exception(
+            "recalculate_base_amounts: batchUpdate failed | user_id=%s: %s",
+            user_id,
+            exc,
+        )
+        return {"status": "error", "error": str(exc)}
+
+    logger.info(
+        "Recalculate done | user_id=%s base=%s updated=%s skipped=%s fx_failures=%s",
+        user_id,
+        base_currency,
+        len(updates),
+        skipped,
+        fx_failures,
+    )
+    return {
+        "status": "ok",
+        "updated": len(updates),
+        "skipped": skipped,
+        "fx_failures": fx_failures,
+        "base_currency": base_currency,
+    }
 
 
 async def summarize_transactions(
@@ -1089,6 +1308,10 @@ async def summarize_transactions(
             service.spreadsheets().values().get(
                 spreadsheetId=user.google_spreadsheet_id,
                 range="Transactions!A2:I",
+                # uk_UA locale uses ',' as decimal — without UNFORMATTED_VALUE
+                # the API returns "350,00" which float() rejects, zeroing all charts.
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING",
             ),
             label="spreadsheets.values.get",
         )
@@ -1123,7 +1346,7 @@ async def summarize_transactions(
 
     for row in rows:
         padded = row + [""] * (_TRANSACTIONS_COL_COUNT - len(row))
-        date_str, _time, ttype, amount_str, _currency, category, _desc, base_amount_str, _base_cur = (
+        date_val, _time, ttype, amount_val, _currency, category, _desc, base_amount_val, _base_cur = (
             padded[:_TRANSACTIONS_COL_COUNT]
         )
         # Prefer Base Amount (col H) so totals are always in user's base
@@ -1131,13 +1354,13 @@ async def summarize_transactions(
         # accuracy degrades gracefully instead of silently dropping the row.
         amount: float
         try:
-            if base_amount_str != "":
-                amount = float(base_amount_str)
-            elif amount_str != "":
-                amount = float(amount_str)
+            if base_amount_val != "":
+                amount = float(base_amount_val)
+            elif amount_val != "":
+                amount = float(amount_val)
             else:
                 continue
-        except ValueError:
+        except (TypeError, ValueError):
             continue
         if ttype not in ("Expense", "Income"):
             continue
@@ -1150,9 +1373,12 @@ async def summarize_transactions(
         bucket["amount"] += amount
         bucket["count"] += 1
 
-        # Month bucket — only count rows within the requested window.
-        if isinstance(date_str, str) and len(date_str) >= 7:
-            month_key = date_str[:7]
+        # Month bucket — only count rows within the requested window. Date
+        # comes back as a serial number from Sheets; _parse_sheets_date is
+        # locale-agnostic so this works regardless of spreadsheet locale.
+        parsed_date = _parse_sheets_date(date_val)
+        if parsed_date is not None:
+            month_key = parsed_date.strftime("%Y-%m")
             if month_key in month_buckets:
                 month_buckets[month_key][ttype_key] += amount
 

@@ -1,0 +1,32 @@
+.sheet-open-btn {
+  display: inline-block;
+  text-decoration: none;
+  margin-right: 8px;
+}
+
+.sheet-reset-btn {
+  margin-top: 4px;
+}
+
+.sheet-confirm {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--surface-soft);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.sheet-confirm p {
+  margin: 0 0 12px;
+}
+
+.sheet-confirm__row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sheet-status {
+  margin-top: 12px;
+  display: block;
+}

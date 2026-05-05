@@ -9,6 +9,20 @@ interface BaseCurrencyResponse {
   supported: string[]
 }
 
+interface RecalcSummary {
+  status: string
+  updated: number
+  skipped: number
+  fx_failures: number
+  base_currency?: string
+}
+
+interface UpdateBaseCurrencyResponse {
+  base_currency: string
+  previous: string
+  recalculation: RecalcSummary | null
+}
+
 export function BaseCurrencySetting() {
   const { user } = useAuth()
   const qc = useQueryClient()
@@ -28,13 +42,14 @@ export function BaseCurrencySetting() {
 
   const mutation = useMutation({
     mutationFn: (code: string) =>
-      api.put<{ base_currency: string }>('/api/me/base-currency', {
+      api.put<UpdateBaseCurrencyResponse>('/api/me/base-currency', {
         currency: code,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['auth', 'me'] })
       qc.invalidateQueries({ queryKey: ['me', 'base-currency'] })
       qc.invalidateQueries({ queryKey: ['finance'] })
+      qc.invalidateQueries({ queryKey: ['transactions'] })
       setPendingCode(null)
     },
   })
@@ -43,8 +58,8 @@ export function BaseCurrencySetting() {
     <section className="card">
       <h2>💱 Базова валюта</h2>
       <p className="card-subtitle">
-        У ній рахуються підсумки в дашборді. Транзакції в інших валютах
-        конвертуються через офіційний курс НБУ і фіксуються на дату запису.
+        У ній рахуються підсумки в дашборді. При зміні бот перерахує всі
+        існуючі транзакції за курсом НБУ на дату кожного запису.
       </p>
 
       <div className="tz-row">
@@ -52,6 +67,7 @@ export function BaseCurrencySetting() {
           value={selected}
           onChange={(e) => setPendingCode(e.target.value)}
           className="tz-select"
+          disabled={mutation.isPending}
         >
           {supported.map((code) => (
             <option key={code} value={code}>
@@ -64,7 +80,7 @@ export function BaseCurrencySetting() {
           disabled={mutation.isPending || selected === current}
           onClick={() => mutation.mutate(selected)}
         >
-          {mutation.isPending ? 'Зберігаю…' : 'Зберегти'}
+          {mutation.isPending ? 'Перераховую…' : 'Зберегти'}
         </button>
       </div>
 
@@ -72,12 +88,32 @@ export function BaseCurrencySetting() {
         {mutation.isError && (
           <span className="muted small tz-status--err">Помилка збереження</span>
         )}
-        {mutation.isSuccess && (
-          <span className="muted small tz-status--ok">
-            Збережено ✓ Старі транзакції залишаться в попередній валюті — натисни
-            "Перестворити Sheet" щоб таблиця теж переключилась.
-          </span>
-        )}
+        {mutation.isSuccess && (() => {
+          const recalc = mutation.data?.recalculation
+          if (!recalc || recalc.status === 'skipped') {
+            return (
+              <span className="muted small tz-status--ok">
+                Збережено ✓ (старий формат таблиці — рядки не перераховувались)
+              </span>
+            )
+          }
+          if (recalc.status !== 'ok') {
+            return (
+              <span className="muted small tz-status--err">
+                Збережено, але перерахунок не вдався. Спробуй пізніше.
+              </span>
+            )
+          }
+          const parts = [`Перераховано ${recalc.updated} транзакцій`]
+          if (recalc.skipped > 0) parts.push(`пропущено ${recalc.skipped}`)
+          if (recalc.fx_failures > 0)
+            parts.push(`без курсу: ${recalc.fx_failures}`)
+          return (
+            <span className="muted small tz-status--ok">
+              Збережено ✓ {parts.join(' · ')}
+            </span>
+          )
+        })()}
       </div>
     </section>
   )
