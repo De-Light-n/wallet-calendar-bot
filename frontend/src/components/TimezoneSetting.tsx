@@ -1,0 +1,62 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { api } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
+import './Card.css'
+
+// Common Ukrainian/EU timezones; user can paste any IANA name in custom field if needed.
+const COMMON_ZONES = [
+  'UTC',
+  'Europe/Kyiv',
+  'Europe/Warsaw',
+  'Europe/Berlin',
+  'Europe/London',
+  'America/New_York',
+  'America/Los_Angeles',
+  'Asia/Tokyo',
+]
+
+export function TimezoneSetting() {
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const [tz, setTz] = useState(user?.timezone ?? 'UTC')
+
+  const mutation = useMutation({
+    mutationFn: (newTz: string) =>
+      api.put<{ timezone: string }>('/api/me/timezone', { timezone: newTz }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['auth', 'me'] }),
+  })
+
+  const options = COMMON_ZONES.includes(tz) ? COMMON_ZONES : [tz, ...COMMON_ZONES]
+
+  return (
+    <section className="card">
+      <h2>⚙️ Часовий пояс</h2>
+      <p className="card-subtitle">
+        Використовується для обробки часу в подіях календаря.
+      </p>
+
+      <div className="tz-row">
+        <select value={tz} onChange={(e) => setTz(e.target.value)} className="tz-select">
+          {options.map((z) => (
+            <option key={z} value={z}>
+              {z}
+            </option>
+          ))}
+        </select>
+        <button
+          className="primary-btn"
+          disabled={mutation.isPending || tz === user?.timezone}
+          onClick={() => mutation.mutate(tz)}
+        >
+          {mutation.isPending ? 'Зберігаю…' : 'Зберегти'}
+        </button>
+      </div>
+
+      <div className="tz-status" aria-live="polite">
+        {mutation.isError && <span className="muted small tz-status--err">Помилка збереження</span>}
+        {mutation.isSuccess && <span className="muted small tz-status--ok">Збережено ✓</span>}
+      </div>
+    </section>
+  )
+}

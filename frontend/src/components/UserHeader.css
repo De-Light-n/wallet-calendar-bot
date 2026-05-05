@@ -1,0 +1,125 @@
+.user-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.user-header__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-h);
+  font-weight: 600;
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.brand:hover {
+  color: var(--text-h);
+  text-decoration: none;
+}
+
+.brand__logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent-bg);
+  font-size: 1rem;
+}
+
+.user-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.avatar--initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  border-color: var(--accent-border);
+}
+
+.profile__text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.profile__name {
+  color: var(--text-h);
+  font-weight: 500;
+  font-size: 0.9375rem;
+}
+
+.profile__email {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  margin-top: 1px;
+}
+
+.logout-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.logout-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-h);
+  border-color: var(--border-strong);
+}
+
+@media (max-width: 720px) {
+  .user-header__inner {
+    padding: 12px 16px;
+  }
+  .profile__text {
+    display: none;
+  }
+  .brand__name {
+    display: none;
+  }
+}
