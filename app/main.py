@@ -28,7 +28,7 @@ import re  # noqa: E402
 from urllib.parse import urlparse  # noqa: E402
 
 from aiogram import Bot, Dispatcher  # noqa: E402
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application  # noqa: E402
+from aiogram.types import Update as TelegramUpdate  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from starlette.middleware.sessions import SessionMiddleware  # noqa: E402
@@ -93,6 +93,11 @@ _TELEGRAM_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
 _telegram_polling_task: asyncio.Task[None] | None = None
 _telegram_polling_dispatcher: Dispatcher | None = None
 _telegram_polling_bot: Bot | None = None
+
+# Webhook-mode counterparts. Populated in on_startup when WEBHOOK_URL is a real
+# public HTTPS host; the FastAPI route below reads them at request time.
+_telegram_webhook_dispatcher: Dispatcher | None = None
+_telegram_webhook_bot: Bot | None = None
 
 
 def _is_valid_telegram_token(token: str) -> bool:
@@ -237,9 +242,23 @@ async def on_startup() -> None:
     dp.include_router(bot_router)
 
     await bot.set_webhook(url=f"{WEBHOOK_URL}{WEBHOOK_PATH}")
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
+
+    global _telegram_webhook_bot, _telegram_webhook_dispatcher
+    _telegram_webhook_bot = bot
+    _telegram_webhook_dispatcher = dp
     logger.info("Telegram webhook registration completed")
+
+
+@app.post("/webhook/{token}")
+async def telegram_webhook(token: str, update: dict) -> dict:
+    # Token in the path doubles as a shared secret — Telegram is the only party
+    # that knows it, so reject anything that doesn't match the configured one.
+    if token != TELEGRAM_TOKEN or _telegram_webhook_dispatcher is None or _telegram_webhook_bot is None:
+        return {"ok": False}
+    await _telegram_webhook_dispatcher.feed_webhook_update(
+        _telegram_webhook_bot, TelegramUpdate.model_validate(update)
+    )
+    return {"ok": True}
 
 
 @app.on_event("shutdown")
@@ -248,10 +267,14 @@ async def on_shutdown() -> None:
     await _stop_telegram_polling()
     await stop_discord_bot()
 
-    if not _webhook_configured():
+    global _telegram_webhook_bot, _telegram_webhook_dispatcher
+    if not _webhook_configured() or _telegram_webhook_bot is None:
         return
     logger.info("Deleting Telegram webhook from %s%s", WEBHOOK_URL, WEBHOOK_PATH)
-    bot = Bot(token=TELEGRAM_TOKEN)
-    await bot.delete_webhook()
-    await bot.session.close()
+    try:
+        await _telegram_webhook_bot.delete_webhook()
+    finally:
+        await _telegram_webhook_bot.session.close()
+        _telegram_webhook_bot = None
+        _telegram_webhook_dispatcher = None
     logger.info("Telegram webhook deleted")

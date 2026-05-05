@@ -1,4 +1,36 @@
-**/node_modules/
+# VCS
+.git/
+.gitignore
+
+# Local Python state
 **/.venv/
 **/__pycache__/
-.git/
+**/*.pyc
+.pytest_cache/
+
+# Frontend lives in a separate deploy (Cloudflare Pages); don't ship JS into
+# the backend image — saves ~300 MB and avoids double-building.
+frontend/
+node_modules/
+
+# Tests don't run in production
+tests/
+
+# Docs / dev artifacts
+docs/
+*.md
+!README.md
+
+# Local env / secrets — must NEVER end up in image
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

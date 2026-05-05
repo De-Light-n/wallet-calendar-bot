@@ -6,7 +6,25 @@
       "Bash(npx tsc *)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/ -v)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_fx.py -q)",
-      "Bash(.venv/Scripts/python.exe -c ' *)"
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "PowerShell(railway login)",
+      "PowerShell(railway whoami)",
+      "PowerShell(railway init --name wallet-calendar-bot)",
+      "PowerShell(railway list)",
+      "PowerShell(railway link --project wallet-calendar-bot 2>&1)",
+      "PowerShell(railway status)",
+      "PowerShell(railway add --database postgres 2>&1)",
+      "PowerShell(railway service 2>&1)",
+      "PowerShell(railway variables 2>&1)",
+      "PowerShell(railway up --help 2>&1)",
+      "PowerShell(railway up --detach --service wallet-calendar-bot 2>&1)",
+      "PowerShell(railway add --help 2>&1)",
+      "PowerShell(railway add --service wallet-calendar-bot 2>&1)",
+      "PowerShell(railway status 2>&1)",
+      "PowerShell($bytes = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create\\(\\).GetBytes\\($bytes\\); $secret = [System.BitConverter]::ToString\\($bytes\\) -replace '-',''; $secret = $secret.ToLower\\(\\); $env:GENERATED_SECRET = $secret; Write-Host \"Generated SECRET_KEY: $secret\")",
+      "PowerShell(railway domain 2>&1)",
+      "PowerShell(railway up --ci 2>&1)",
+      "PowerShell(railway logs --deployment 2>&1)"
     ]
   }
 }
