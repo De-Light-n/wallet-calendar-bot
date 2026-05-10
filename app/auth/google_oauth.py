@@ -38,6 +38,7 @@ def _client_config() -> dict[str, Any]:
 
 
 def build_flow(state: str | None = None) -> Flow:
+    """Construct a configured ``Flow`` with the project's scopes + redirect URI."""
     flow = Flow.from_client_config(
         _client_config(),
         scopes=SCOPES,
@@ -48,6 +49,11 @@ def build_flow(state: str | None = None) -> Flow:
 
 
 def authorization_url(state: str) -> tuple[str, str | None]:
+    """Build the consent-screen URL and return it with the PKCE code verifier.
+
+    ``access_type=offline`` + ``prompt=consent`` requests a refresh token, so
+    we can keep talking to Google APIs after the access token expires.
+    """
     flow = build_flow(state=state)
     url, _ = flow.authorization_url(
         access_type="offline",
@@ -63,6 +69,7 @@ def exchange_code(
     *,
     code_verifier: str | None = None,
 ) -> Credentials:
+    """Trade the authorization code for OAuth credentials (PKCE-aware)."""
     flow = build_flow(state=state)
 
     fetch_kwargs: dict[str, str] = {"code": code}

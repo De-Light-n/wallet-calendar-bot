@@ -9,6 +9,7 @@ interface LinkCodeResponse {
   expires_at: string
   channel: string
   bot_url: string | null
+  bot_name: string | null
   instructions: string
 }
 

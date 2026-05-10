@@ -1,4 +1,10 @@
-"""Database session and engine setup."""
+"""Database engine, session factory, and lightweight schema bootstrap.
+
+Postgres is the default; SQLite is supported for local development. Schema
+migrations are intentionally minimal — there is a single :func:`init_db`
+that creates missing tables and adds the columns that newer code expects, so
+existing deployments keep working without a separate migration tool.
+"""
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 

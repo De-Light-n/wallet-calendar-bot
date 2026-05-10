@@ -1,4 +1,9 @@
-"""Authenticated dashboard API: link codes, transactions, calendar, settings."""
+"""Authenticated dashboard API: link codes, transactions, calendar, settings.
+
+All endpoints under ``/api`` rely on :func:`app.auth.dependencies.current_user`
+to resolve the caller from the session cookie set by the OAuth callback.
+Anonymous channel ingress lives in :mod:`app.channels.routes` instead.
+"""
 from __future__ import annotations
 
 import logging
@@ -35,27 +40,35 @@ def _telegram_bot_url() -> str | None:
     return f"https://t.me/{username}" if username else None
 
 
-def _channel_install_payload(channel: str, code: str) -> tuple[str | None, str]:
-    """Return (bot_url, instructions) for the given channel.
+def _channel_install_payload(channel: str, code: str) -> dict[str, str | None]:
+    """Return install metadata for the given channel.
 
-    bot_url is an env-driven install / open link; None when not configured.
-    instructions is a short user-facing hint shown next to the code.
+    The frontend uses these fields to render channel-specific guidance:
+
+    * ``bot_url`` — env-driven install / open link, ``None`` when not configured.
+    * ``bot_name`` — display handle so the user can search for the bot manually
+      when ``bot_url`` is missing (e.g. ``@wallet-bot`` on Slack).
+    * ``instructions`` — short Ukrainian hint shown next to the code.
     """
     if channel == "telegram":
-        return (
-            _telegram_bot_url(),
-            f"Відкрий бот у Telegram і напиши: /link {code}",
-        )
+        username = os.getenv("TELEGRAM_BOT_USERNAME") or None
+        bot_name = f"@{username}" if username else None
+        return {
+            "bot_url": _telegram_bot_url(),
+            "bot_name": bot_name,
+            "instructions": f"Відкрий бот у Telegram і напиши: /link {code}",
+        }
     if channel == "slack":
-        return (
-            os.getenv("SLACK_INSTALL_URL") or None,
-            f"Напиши боту в Slack DM (або тегни в каналі): /link {code}",
-        )
-    # discord
-    return (
-        os.getenv("DISCORD_INSTALL_URL") or None,
-        f"Напиши боту в Discord DM (або в каналі з ним): /link {code}",
-    )
+        return {
+            "bot_url": os.getenv("SLACK_INSTALL_URL") or None,
+            "bot_name": os.getenv("SLACK_BOT_NAME") or None,
+            "instructions": f"Напиши боту в Slack DM (або тегни в каналі): /link {code}",
+        }
+    return {
+        "bot_url": os.getenv("DISCORD_INSTALL_URL") or None,
+        "bot_name": os.getenv("DISCORD_BOT_NAME") or None,
+        "instructions": f"Напиши боту в Discord DM (або в каналі з ним): /link {code}",
+    }
 
 
 @router.post("/link-codes")
@@ -64,6 +77,13 @@ async def create_link_code(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    """Issue a short-lived code that links an external chat account to this user.
+
+    Body: ``{"channel": "telegram"|"slack"|"discord"}`` (default ``telegram``).
+    The returned ``code`` is consumed by the matching channel's ``/link <code>``
+    command. The response also includes a deep link (``bot_url``) and a localised
+    ``instructions`` string the frontend can render verbatim.
+    """
     channel = ((payload or {}).get("channel") or "telegram").lower()
     if channel not in _LINK_SUPPORTED_CHANNELS:
         raise HTTPException(status_code=400, detail=f"Unsupported channel: {channel}")
@@ -71,13 +91,14 @@ async def create_link_code(
         raise HTTPException(status_code=404, detail=f"Channel disabled: {channel}")
 
     link = generate_link_code(db, user)
-    bot_url, instructions = _channel_install_payload(channel, link.code)
+    install = _channel_install_payload(channel, link.code)
     return {
         "code": link.code,
         "expires_at": link.expires_at.isoformat(),
         "channel": channel,
-        "bot_url": bot_url,
-        "instructions": instructions,
+        "bot_url": install["bot_url"],
+        "bot_name": install["bot_name"],
+        "instructions": install["instructions"],
     }
 
 
@@ -87,6 +108,7 @@ async def get_recent_transactions(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    """Return the latest ``limit`` rows from the user's Google Sheets ledger."""
     items = await list_recent_transactions(db, user_id=user.id, limit=limit)
     spreadsheet_url = None
     if user.google_spreadsheet_id:
@@ -112,6 +134,7 @@ async def get_upcoming_events(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    """Return the next ``limit`` upcoming events from the user's primary calendar."""
     result = await list_upcoming_events(db, user_id=user.id, limit=limit)
     return {"items": result.get("events", [])}
 
@@ -271,6 +294,7 @@ async def update_timezone(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    """Update the user's IANA timezone (e.g. ``Europe/Kyiv``) after validation."""
     tz = (payload or {}).get("timezone")
     if not isinstance(tz, str) or not tz:
         raise HTTPException(status_code=400, detail="`timezone` is required")

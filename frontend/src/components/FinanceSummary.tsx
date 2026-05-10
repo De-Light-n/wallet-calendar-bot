@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { TrendingDown, TrendingUp, Wallet, Receipt } from 'lucide-react'
 import { api } from '../api/client'
 import './Card.css'
 import './FinanceSummary.css'
@@ -130,10 +131,16 @@ export function FinanceSummary() {
     <>
       <section className="kpi-grid">
         <article className="kpi-card kpi-card--expense">
+          <div className="kpi-card__icon">
+            <TrendingDown size={18} strokeWidth={2.25} />
+          </div>
           <div className="kpi-card__label">Витрати ({baseCurrency})</div>
           <div className="kpi-card__value">{formatMoney(data.totals.expense)}</div>
         </article>
         <article className="kpi-card kpi-card--income">
+          <div className="kpi-card__icon">
+            <TrendingUp size={18} strokeWidth={2.25} />
+          </div>
           <div className="kpi-card__label">Доходи ({baseCurrency})</div>
           <div className="kpi-card__value">{formatMoney(data.totals.income)}</div>
         </article>
@@ -142,13 +149,19 @@ export function FinanceSummary() {
             data.totals.balance >= 0 ? 'kpi-card--income' : 'kpi-card--expense'
           }`}
         >
+          <div className="kpi-card__icon">
+            <Wallet size={18} strokeWidth={2.25} />
+          </div>
           <div className="kpi-card__label">Баланс ({baseCurrency})</div>
           <div className="kpi-card__value">
             {data.totals.balance >= 0 ? '+' : ''}
             {formatMoney(data.totals.balance)}
           </div>
         </article>
-        <article className="kpi-card">
+        <article className="kpi-card kpi-card--neutral">
+          <div className="kpi-card__icon">
+            <Receipt size={18} strokeWidth={2.25} />
+          </div>
           <div className="kpi-card__label">Транзакцій</div>
           <div className="kpi-card__value">{data.totals.count}</div>
         </article>
@@ -166,32 +179,49 @@ export function FinanceSummary() {
               <BarChart
                 data={monthlyData}
                 margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                barGap={4}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <defs>
+                  <linearGradient id="expenseBar" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f87171" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#ef4444" stopOpacity={0.75} />
+                  </linearGradient>
+                  <linearGradient id="incomeBar" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#4ade80" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#22c55e" stopOpacity={0.75} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="label"
                   stroke="var(--text-muted)"
                   tick={{ fontSize: 12 }}
+                  axisLine={false}
+                  tickLine={false}
                 />
                 <YAxis
                   stroke="var(--text-muted)"
                   tick={{ fontSize: 12 }}
                   width={60}
+                  axisLine={false}
+                  tickLine={false}
                 />
                 <Tooltip
+                  cursor={{ fill: 'var(--accent-bg)' }}
                   contentStyle={{
                     background: 'var(--surface)',
                     border: '1px solid var(--border)',
-                    borderRadius: 8,
+                    borderRadius: 12,
                     color: 'var(--text-h)',
+                    boxShadow: 'var(--shadow)',
                   }}
                   formatter={(v) =>
                     typeof v === 'number' ? formatMoney(v) : String(v)
                   }
                 />
                 <Legend wrapperStyle={{ fontSize: 13, paddingTop: 8 }} />
-                <Bar dataKey="expense" name="Витрати" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="income" name="Доходи" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="expense" name="Витрати" fill="url(#expenseBar)" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="income" name="Доходи" fill="url(#incomeBar)" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -215,27 +245,40 @@ export function FinanceSummary() {
               >
                 <defs>
                   <linearGradient id="cumulFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                    <stop offset="0%" stopColor="#a78bfa" stopOpacity={0.45} />
+                    <stop offset="100%" stopColor="#a78bfa" stopOpacity={0} />
                   </linearGradient>
+                  <filter id="cumulGlow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feMerge>
+                      <feMergeNode in="blur" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="label"
                   stroke="var(--text-muted)"
                   tick={{ fontSize: 12 }}
+                  axisLine={false}
+                  tickLine={false}
                 />
                 <YAxis
                   stroke="var(--text-muted)"
                   tick={{ fontSize: 12 }}
                   width={60}
+                  axisLine={false}
+                  tickLine={false}
                 />
                 <Tooltip
+                  cursor={{ stroke: 'var(--accent)', strokeWidth: 1, strokeDasharray: '4 4' }}
                   contentStyle={{
                     background: 'var(--surface)',
                     border: '1px solid var(--border)',
-                    borderRadius: 8,
+                    borderRadius: 12,
                     color: 'var(--text-h)',
+                    boxShadow: 'var(--shadow)',
                   }}
                   formatter={(v) =>
                     typeof v === 'number' ? formatMoney(v) : String(v)
@@ -245,9 +288,11 @@ export function FinanceSummary() {
                   type="monotone"
                   dataKey="cumulative"
                   name="Кумулятивний баланс"
-                  stroke="#3b82f6"
+                  stroke="#a78bfa"
                   fill="url(#cumulFill)"
-                  strokeWidth={2}
+                  strokeWidth={2.5}
+                  filter="url(#cumulGlow)"
+                  activeDot={{ r: 5, stroke: 'var(--surface)', strokeWidth: 2, fill: '#a78bfa' }}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -273,7 +318,11 @@ export function FinanceSummary() {
                     nameKey="category"
                     cx="50%"
                     cy="50%"
+                    innerRadius={68}
                     outerRadius={100}
+                    paddingAngle={2}
+                    stroke="var(--surface)"
+                    strokeWidth={2}
                     label={({ name, percent }) =>
                       `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
                     }
@@ -287,8 +336,9 @@ export function FinanceSummary() {
                     contentStyle={{
                       background: 'var(--surface)',
                       border: '1px solid var(--border)',
-                      borderRadius: 8,
+                      borderRadius: 12,
                       color: 'var(--text-h)',
+                      boxShadow: 'var(--shadow)',
                     }}
                     formatter={(v) =>
                       typeof v === 'number' ? formatMoney(v) : String(v)
@@ -296,6 +346,13 @@ export function FinanceSummary() {
                   />
                 </PieChart>
               </ResponsiveContainer>
+              <div className="donut-center">
+                <span className="donut-center__label">Усього</span>
+                <span className="donut-center__value">
+                  {formatMoney(data.totals.expense)}
+                </span>
+                <span className="donut-center__sub">{baseCurrency}</span>
+              </div>
             </div>
           ) : (
             <div className="empty">Поки немає витрат.</div>
@@ -317,7 +374,11 @@ export function FinanceSummary() {
                     nameKey="category"
                     cx="50%"
                     cy="50%"
+                    innerRadius={68}
                     outerRadius={100}
+                    paddingAngle={2}
+                    stroke="var(--surface)"
+                    strokeWidth={2}
                     label={({ name, percent }) =>
                       `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
                     }
@@ -331,8 +392,9 @@ export function FinanceSummary() {
                     contentStyle={{
                       background: 'var(--surface)',
                       border: '1px solid var(--border)',
-                      borderRadius: 8,
+                      borderRadius: 12,
                       color: 'var(--text-h)',
+                      boxShadow: 'var(--shadow)',
                     }}
                     formatter={(v) =>
                       typeof v === 'number' ? formatMoney(v) : String(v)
@@ -340,6 +402,13 @@ export function FinanceSummary() {
                   />
                 </PieChart>
               </ResponsiveContainer>
+              <div className="donut-center">
+                <span className="donut-center__label">Усього</span>
+                <span className="donut-center__value">
+                  {formatMoney(data.totals.income)}
+                </span>
+                <span className="donut-center__sub">{baseCurrency}</span>
+              </div>
             </div>
           ) : (
             <div className="empty">Поки немає доходів.</div>

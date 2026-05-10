@@ -1,4 +1,27 @@
-"""Finance tool – records transactions to a per-user Google Sheets ledger."""
+"""Finance tool: per-user Google Sheets ledger backed by NBU exchange rates.
+
+Each user owns a personal spreadsheet provisioned on first use with three
+sheets:
+
+* **Dashboard** — month-to-date / previous-month / all-time KPIs and charts,
+  rendered in the user's base currency.
+* **Transactions** — raw ledger; nine columns including *Base Amount* /
+  *Base Currency* (v2 schema) for multi-currency reporting.
+* **Categories** / **Monthly** — pivot data feeding the dashboard charts.
+
+The schema version is stored on :class:`~app.database.models.User` so existing
+v1 (7-column) sheets keep working until the user runs ``/new_sheet``.
+
+Public surface used by the agent and the dashboard API:
+
+* :func:`record_transaction` — append a row + refresh dashboard formulas.
+* :func:`list_recent_transactions`, :func:`summarize_transactions` —
+  read paths used by ``/api/me/...``.
+* :func:`reset_user_spreadsheet` — provision a fresh sheet with the latest
+  layout. The previous spreadsheet is left intact in the user's Drive.
+* :func:`recalculate_base_amounts` — repopulate columns H/I after a base
+  currency change.
+"""
 from __future__ import annotations
 
 import datetime
@@ -89,6 +112,7 @@ def _get_google_credentials(
 
 
 def _normalize_transaction_type(transaction_type: str) -> str | None:
+    """Map ``"expense"``/``"income"`` (any case) to the canonical Sheets label."""
     return ALLOWED_TRANSACTION_TYPES.get(transaction_type.strip().lower())
 
 
@@ -141,6 +165,7 @@ _TRANSACTIONS_COL_COUNT = len(_TRANSACTIONS_HEADER)
 
 
 def _spreadsheet_url(spreadsheet_id: str) -> str:
+    """Build the user-visible Google Sheets URL for the given spreadsheet id."""
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
 
 

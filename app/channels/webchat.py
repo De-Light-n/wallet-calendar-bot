@@ -8,9 +8,12 @@ from app.core.context import AgentRequestContext
 
 
 class WebChatAdapter(ChannelAdapter):
+    """Adapter for the React frontend's ``{text, external_user_id}`` shape."""
+
     channel_name = "web"
 
     def normalize(self, payload: dict[str, Any]) -> NormalizedMessage | None:
+        """Reject empty payloads; pass through trusted external IDs unchanged."""
         text = payload.get("text")
         external_user_id = payload.get("external_user_id")
         if not text or not external_user_id:

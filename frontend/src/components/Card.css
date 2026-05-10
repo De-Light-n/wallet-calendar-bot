@@ -10,6 +10,13 @@
     transform 200ms ease;
 }
 
+@media (max-width: 540px) {
+  .card {
+    padding: 18px;
+    border-radius: var(--radius);
+  }
+}
+
 .card:hover {
   border-color: var(--border-strong);
   box-shadow: var(--shadow);
@@ -100,6 +107,32 @@
 .ghost-btn:hover {
   background: var(--code-bg);
   border-color: var(--border-strong);
+}
+
+.howto {
+  margin: 0 0 16px;
+  padding-left: 22px;
+  color: var(--text);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+.howto li {
+  margin-bottom: 6px;
+}
+.howto li:last-child {
+  margin-bottom: 0;
+}
+.howto code {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  background: var(--code-bg);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.code-block .howto {
+  text-align: left;
+  margin: 14px 0 10px;
 }
 
 .code-block {

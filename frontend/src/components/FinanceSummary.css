@@ -6,27 +6,87 @@
 }
 
 .kpi-card {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 18px 20px;
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+}
+
+.kpi-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+
+/* Vertical accent bar on the left edge — colored by KPI type. The faint
+   gradient fade makes it look more like a glow than a hard divider. */
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12%;
+  bottom: 12%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+.kpi-card--expense::before {
+  background: linear-gradient(to bottom, transparent, var(--danger), transparent);
+  opacity: 0.85;
+}
+.kpi-card--income::before {
+  background: linear-gradient(to bottom, transparent, var(--success), transparent);
+  opacity: 0.85;
+}
+.kpi-card--neutral::before {
+  background: linear-gradient(to bottom, transparent, var(--accent-2), transparent);
+  opacity: 0.85;
+}
+
+.kpi-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.kpi-card--expense .kpi-card__icon {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.kpi-card--income .kpi-card__icon {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.kpi-card--neutral .kpi-card__icon {
+  background: var(--accent-2-bg);
+  color: var(--accent-2);
 }
 
 .kpi-card__label {
   font-size: 0.8125rem;
   color: var(--text-muted);
-  margin-bottom: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  margin-bottom: 4px;
   font-weight: 500;
 }
 
 .kpi-card__value {
-  font-size: 1.5rem;
+  font-size: 1.625rem;
   font-weight: 600;
   color: var(--text-h);
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .kpi-card--expense .kpi-card__value {
@@ -49,6 +109,45 @@
 
 .chart-wrap--pie {
   height: 320px;
+  position: relative;
+}
+
+/* Center label inside the donut — overlays the chart at the hole. Pointer
+   events disabled so the underlying recharts tooltip still works. */
+.donut-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  text-align: center;
+  line-height: 1.1;
+}
+
+.donut-center__label {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.donut-center__value {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.donut-center__sub {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
 
 .charts-pair {
@@ -66,14 +165,36 @@
 @media (max-width: 720px) {
   .kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .kpi-card {
+    padding: 14px 16px;
+  }
+  .kpi-card__value {
+    font-size: 1.25rem;
   }
   .chart-wrap {
-    height: 260px;
+    height: 240px;
   }
   .chart-wrap--pie {
     height: 280px;
   }
+  .donut-center__value {
+    font-size: 1rem;
+  }
+}
+
+/* Very narrow phones: drop the icon (saves vertical space) and reduce label. */
+@media (max-width: 380px) {
+  .kpi-card__icon {
+    width: 26px;
+    height: 26px;
+    margin-bottom: 6px;
+  }
+  .kpi-card__label {
+    font-size: 0.75rem;
+  }
   .kpi-card__value {
-    font-size: 1.25rem;
+    font-size: 1.125rem;
   }
 }

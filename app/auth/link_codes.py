@@ -1,4 +1,11 @@
-"""Generation and consumption of short-lived channel-link codes."""
+"""Generation and consumption of short-lived channel-link codes.
+
+A user signs in to the web app with Google, generates a one-time code on the
+dashboard, and types ``/link <code>`` in Telegram, Slack, or Discord. The
+matching :class:`~app.database.models.ChannelAccount` then points to the
+authenticated :class:`~app.database.models.User`, leaving any anonymous
+user that previously held that channel account orphaned (and removable).
+"""
 from __future__ import annotations
 
 import datetime
@@ -13,10 +20,12 @@ _DEFAULT_TTL_MINUTES = 10
 
 
 def _utcnow() -> datetime.datetime:
+    """Timezone-aware UTC ``now`` (the rest of the codebase relies on aware dts)."""
     return datetime.datetime.now(datetime.timezone.utc)
 
 
 def _generate_code(length: int = 8) -> str:
+    """Cryptographically random uppercase code drawn from the safe alphabet."""
     return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(length))
 
 

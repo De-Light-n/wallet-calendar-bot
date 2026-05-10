@@ -8,9 +8,12 @@ from app.core.context import AgentRequestContext
 
 
 class TelegramAdapter(ChannelAdapter):
+    """Adapter for Telegram ``Update.message`` payloads (text only)."""
+
     channel_name = "telegram"
 
     def normalize(self, payload: dict[str, Any]) -> NormalizedMessage | None:
+        """Return text+sender from a Telegram update; ``None`` for non-text events."""
         message = payload.get("message") or {}
         from_user = message.get("from") or {}
         text = message.get("text")

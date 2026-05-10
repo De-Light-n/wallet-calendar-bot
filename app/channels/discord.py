@@ -8,9 +8,12 @@ from app.core.context import AgentRequestContext
 
 
 class DiscordAdapter(ChannelAdapter):
+    """Adapter for Discord ``MESSAGE_CREATE`` payloads."""
+
     channel_name = "discord"
 
     def normalize(self, payload: dict[str, Any]) -> NormalizedMessage | None:
+        """Drop bot/system messages and lift the text + author into our envelope."""
         text = payload.get("content")
         author = payload.get("author") or {}
         external_user_id = author.get("id")

@@ -1,3 +1,4 @@
+import { Sun, Moon, Monitor } from 'lucide-react'
 import { useTheme, type ThemeMode } from './ThemeContext'
 import './ThemeToggle.css'
 
@@ -7,14 +8,15 @@ const LABELS: Record<ThemeMode, string> = {
   system: 'Системна',
 }
 
-const ICONS: Record<ThemeMode, string> = {
-  light: '☀️',
-  dark: '🌙',
-  system: '💻',
+const ICONS: Record<ThemeMode, typeof Sun> = {
+  light: Sun,
+  dark: Moon,
+  system: Monitor,
 }
 
 export function ThemeToggle() {
   const { mode, cycle } = useTheme()
+  const Icon = ICONS[mode]
 
   return (
     <button
@@ -24,9 +26,7 @@ export function ThemeToggle() {
       title={`Тема: ${LABELS[mode]} — натисни щоб змінити`}
       aria-label={`Перемкнути тему. Зараз: ${LABELS[mode]}`}
     >
-      <span className="theme-toggle__icon" aria-hidden="true">
-        {ICONS[mode]}
-      </span>
+      <Icon size={15} strokeWidth={2} aria-hidden="true" />
       <span className="theme-toggle__label">{LABELS[mode]}</span>
     </button>
   )

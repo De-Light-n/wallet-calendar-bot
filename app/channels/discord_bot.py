@@ -45,6 +45,7 @@ def _build_intents() -> discord.Intents:
 
 
 def _create_client() -> discord.Client:
+    """Wire up the Discord client and register ``on_ready`` / ``on_message`` hooks."""
     client = discord.Client(intents=_build_intents())
 
     @client.event
@@ -65,6 +66,12 @@ def _create_client() -> discord.Client:
 
 
 async def _handle_message(client: discord.Client, message: discord.Message) -> None:
+    """Top-level message handler: filter, dispatch commands, or call the agent.
+
+    Guild messages are answered only when the bot is mentioned or replied to;
+    DMs always get a response. ``/link`` and ``/currency`` are handled inline
+    (no LLM hop) so account binding works even when the LLM is unreachable.
+    """
     # Anti-loop: never react to bot/system messages, including ourselves.
     if message.author.bot or message.author.system:
         return
@@ -129,6 +136,7 @@ async def _handle_message(client: discord.Client, message: discord.Message) -> N
 
 
 async def _handle_link_command(*, message: discord.Message, text: str) -> None:
+    """Consume a ``/link <code>`` command, binding this Discord identity to a user."""
     parts = text.split(maxsplit=1)
     code = parts[1].strip() if len(parts) > 1 else ""
     if not code:

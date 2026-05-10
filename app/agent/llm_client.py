@@ -1,4 +1,21 @@
-"""LLM client – OpenAI function-calling agent."""
+"""LLM client: OpenAI-compatible function-calling agent.
+
+Currently wired to Google Gemini through Gemini's OpenAI-compatible endpoint
+so the same SDK code path serves both providers. Swapping back to OpenAI is a
+matter of changing :func:`_get_client`.
+
+The single public entry point is :func:`run_agent`, which:
+
+1. Builds the system prompt with the user's local timezone baked in.
+2. Issues a first chat-completion call with the registered tool schemas.
+3. If the model returned ``tool_calls``, executes them via
+   :class:`~app.agent.tool_registry.ToolRegistry` and feeds the results back.
+4. Issues a second call to obtain the final natural-language answer.
+
+Transient provider errors are retried with exponential backoff. When the
+follow-up call fails after tool execution, a deterministic fallback summary is
+returned so the user still sees the action result.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -38,6 +55,7 @@ def _render_llm_error(exc: Exception) -> str:
 
 
 def _status_code_from_error(exc: Exception) -> int | None:
+    """Best-effort extraction of an HTTP status code from a provider exception."""
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int):
         return status_code
@@ -50,6 +68,7 @@ def _status_code_from_error(exc: Exception) -> int | None:
 
 
 def _retry_after_seconds(exc: Exception) -> float | None:
+    """Read the ``Retry-After`` header and clamp it to a sane wait window."""
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None)
     if headers is None:
@@ -67,6 +86,7 @@ def _retry_after_seconds(exc: Exception) -> float | None:
 
 
 def _is_retryable_llm_error(exc: Exception) -> bool:
+    """True when the exception represents a transient provider failure."""
     if isinstance(exc, RateLimitError):
         return True
     if isinstance(exc, APIError):
@@ -76,6 +96,7 @@ def _is_retryable_llm_error(exc: Exception) -> bool:
 
 
 async def _create_chat_completion(client: AsyncOpenAI, **kwargs: Any) -> Any:
+    """Call ``chat.completions.create`` with bounded retries on transient errors."""
     attempts = len(_RETRY_DELAYS_SECONDS) + 1
     for attempt in range(1, attempts + 1):
         try:
@@ -103,6 +124,13 @@ async def _create_chat_completion(client: AsyncOpenAI, **kwargs: Any) -> Any:
 
 
 def _fallback_after_tool_execution(tool_results: list[tuple[str, dict[str, Any]]]) -> str | None:
+    """Render a deterministic summary when the post-tool LLM call fails.
+
+    Used as a graceful degradation path: the side effects already happened
+    (event created / transaction recorded), so we surface that to the user
+    instead of swallowing the action behind a generic provider error.
+    Returns ``None`` if no tool succeeded — there is nothing useful to report.
+    """
     successful = [
         (name, payload)
         for name, payload in tool_results
@@ -142,18 +170,22 @@ def _fallback_after_tool_execution(tool_results: list[tuple[str, dict[str, Any]]
 
 
 def _get_client() -> AsyncOpenAI:
-    """Create OpenAI client lazily to avoid import-time failures in tests."""
+    """Build the LLM client lazily so import-time failures don't break tests.
+
+    Uses Google Gemini through its OpenAI-compatible endpoint, which keeps the
+    SDK code path identical to a vanilla OpenAI deployment.
+    """
     global _client
     if _client is None:
-        # Google Gemini тепер має офіційну підтримку OpenAI SDK!
         _client = AsyncOpenAI(
             api_key=settings.gemini_api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
     return _client
 
+
 def _build_registry() -> ToolRegistry:
-    """Register default tools for this assistant."""
+    """Register the tools exposed to the agent for function-calling."""
     # Lazy import so tool modules can safely import DB models.
     from app.tools.calendar_tool import (
         create_calendar_event,
@@ -383,7 +415,20 @@ async def run_agent(
     db_session: Any,
     context: AgentRequestContext | None = None,
 ) -> str:
-    # 🌍 Вирішуємо проблему часового поясу
+    """Run the function-calling agent loop for a single user message.
+
+    Args:
+        user_message: Raw user text (already transcribed for voice inputs).
+        user_id: Internal database user id used by tool executors.
+        db_session: Active SQLAlchemy session passed through to tools.
+        context: Optional request context (channel, timezone, correlation id).
+            When omitted, ``"UTC"`` is used and a fresh correlation id is logged.
+
+    Returns:
+        The assistant's final natural-language reply, or — if the provider
+        fails after tools already executed — a deterministic fallback summary
+        describing what was recorded.
+    """
     tz_str = context.timezone if context and context.timezone else "UTC"
     try:
         tz = zoneinfo.ZoneInfo(tz_str)

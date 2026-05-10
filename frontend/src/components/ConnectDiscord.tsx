@@ -9,6 +9,7 @@ interface LinkCodeResponse {
   expires_at: string
   channel: string
   bot_url: string | null
+  bot_name: string | null
   instructions: string
 }
 
@@ -43,10 +44,19 @@ export function ConnectDiscord() {
         </p>
       ) : (
         <>
-          <p className="muted">
-            Запроси бота на свій сервер (або відкрий DM), потім згенеруй
-            одноразовий код і відправ його командою <code>/link</code>.
-          </p>
+          <ol className="howto">
+            <li>
+              Запроси бот на свій Discord-сервер (потрібні права на читання й
+              надсилання повідомлень).
+            </li>
+            <li>
+              Відкрий DM з ботом або канал, де він присутній — згадай його як{' '}
+              <code>@bot</code>, щоб він почув повідомлення.
+            </li>
+            <li>
+              Надішли команду <code>/link &lt;код&gt;</code>.
+            </li>
+          </ol>
 
           {!code && (
             <button
@@ -61,19 +71,41 @@ export function ConnectDiscord() {
           {code && (
             <div className="code-block">
               <div className="code-value">{code.code}</div>
-              <p className="muted">
-                {code.bot_url ? (
-                  <>
-                    Запроси бота:{' '}
-                    <a href={code.bot_url} target="_blank" rel="noreferrer">
-                      Add to Discord
-                    </a>
-                  </>
-                ) : (
-                  'Відкрий DM з ботом у Discord'
-                )}{' '}
-                і напиши:
-              </p>
+
+              <ol className="howto">
+                <li>
+                  {code.bot_url ? (
+                    <>
+                      Запроси бот на сервер:{' '}
+                      <a href={code.bot_url} target="_blank" rel="noreferrer">
+                        Add to Discord
+                      </a>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      Попроси адміна сервера додати бот{' '}
+                      {code.bot_name ? (
+                        <strong>{code.bot_name}</strong>
+                      ) : (
+                        'Wallet Calendar'
+                      )}
+                      .
+                    </>
+                  )}
+                </li>
+                <li>
+                  Відкрий DM з ботом{' '}
+                  {code.bot_name ? (
+                    <>
+                      (<strong>{code.bot_name}</strong>)
+                    </>
+                  ) : null}{' '}
+                  або згадай його у каналі через <code>@bot</code>.
+                </li>
+                <li>Надішли команду:</li>
+              </ol>
+
               <pre className="cmd">/link {code.code}</pre>
               <p className="muted small">
                 Код діє 10 хвилин. Після прив'язки оновіть сторінку.

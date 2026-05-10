@@ -1,4 +1,9 @@
-"""Speech-to-Text module using Groq Whisper API."""
+"""Speech-to-Text adapter using Groq's OpenAI-compatible Whisper endpoint.
+
+Groq exposes the Whisper-large model behind the same wire protocol as OpenAI,
+so we reuse the OpenAI SDK and only change the base URL. This keeps voice
+transcription cheap and fast without changing call sites.
+"""
 import logging
 from pathlib import Path
 
@@ -13,13 +18,13 @@ _client: AsyncOpenAI | None = None
 
 
 def _get_client() -> AsyncOpenAI:
+    """Build the Groq client lazily; warn loudly when the key is missing."""
     global _client
     if _client is None:
         if not settings.groq_api_key:
             logger.warning(
                 "GROQ_API_KEY is empty — STT calls will fail with 401 from Groq."
             )
-        # Використовуємо Groq як OpenAI-сумісний API
         _client = AsyncOpenAI(
             api_key=settings.groq_api_key,
             base_url="https://api.groq.com/openai/v1",

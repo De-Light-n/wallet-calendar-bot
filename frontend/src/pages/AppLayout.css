@@ -1,47 +1,76 @@
+.app-shell {
+  display: flex;
+  align-items: stretch;
+  min-height: 100svh;
+}
+
 .app-main {
-  max-width: 1200px;
+  flex: 1;
+  min-width: 0;
+  /* Faint dot grid — gives the empty space some texture without competing for
+     attention with content. Pinned via background-attachment so it doesn't
+     jitter on scroll on high-density displays. */
+  background-image: radial-gradient(circle, var(--dot-color) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: 0 0;
+}
+
+.app-main__inner {
+  max-width: 980px;
   margin: 0 auto;
-  padding: 32px 24px 64px;
+  padding: 40px 32px 80px;
   display: flex;
   flex-direction: column;
   gap: 28px;
+  animation: app-fade-in 280ms ease-out both;
 }
 
-/* Hero used on the Overview page — bigger, centered, with a soft gradient name. */
+@keyframes app-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Hero used on the Overview page — generous, restrained, no decorative gradient. */
 .overview-hero {
-  text-align: center;
-  padding: 40px 16px 8px;
+  padding: 16px 0 8px;
 }
 
 .overview-hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--accent);
-  margin: 0 0 14px;
+  color: var(--accent-2);
+  margin: 0 0 12px;
+}
+
+.overview-hero__eyebrow::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  box-shadow: 0 0 0 4px var(--accent-2-bg);
 }
 
 .overview-hero__title {
-  font-size: clamp(2rem, 5vw, 3rem);
-  letter-spacing: -0.025em;
-  line-height: 1.05;
-  margin: 0 0 14px;
-}
-
-.overview-hero__name {
-  background: linear-gradient(120deg, var(--accent), #ec4899 60%, #f59e0b);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0 0 12px;
+  color: var(--text-h);
 }
 
 .overview-hero__lead {
   color: var(--text);
-  margin: 0 auto;
-  max-width: 600px;
+  margin: 0;
+  max-width: 620px;
   line-height: 1.6;
-  font-size: 1.0625rem;
+  font-size: 1rem;
 }
 
 .page-hero {
@@ -50,6 +79,7 @@
   justify-content: space-between;
   gap: 24px;
   flex-wrap: wrap;
+  padding: 8px 0 4px;
 }
 
 .page-hero__eyebrow {
@@ -57,13 +87,14 @@
   letter-spacing: 0.08em;
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text-muted);
   margin: 0 0 6px;
 }
 
 .page-hero__title {
   font-size: clamp(1.5rem, 3vw, 2rem);
   margin: 0 0 6px;
+  letter-spacing: -0.015em;
 }
 
 .page-hero__lead {
@@ -76,11 +107,11 @@
 .page-hero__cta {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   background: var(--surface);
   color: var(--text-h);
   border: 1px solid var(--border);
-  padding: 11px 18px;
+  padding: 9px 16px;
   border-radius: var(--radius);
   font-size: 0.9375rem;
   font-weight: 500;
@@ -125,14 +156,14 @@
 }
 
 @media (max-width: 920px) {
-  .app-main {
-    padding: 24px 16px 48px;
+  .app-shell {
+    flex-direction: column;
+  }
+  .app-main__inner {
+    padding: 24px 16px 64px;
     gap: 20px;
   }
   .page-grid {
     grid-template-columns: 1fr;
-  }
-  .overview-hero {
-    padding: 16px 8px 0;
   }
 }

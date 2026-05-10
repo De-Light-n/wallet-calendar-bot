@@ -1,4 +1,15 @@
-"""Web authentication endpoints: Google OAuth init/callback, /me, logout."""
+"""Web authentication endpoints: Google OAuth init/callback, /me, logout.
+
+Implements the PKCE-protected web Google Sign-In flow:
+
+1. ``GET /auth/google/init`` — generates ``state`` + PKCE code verifier and
+   redirects the browser to Google's consent screen.
+2. ``GET /auth/google/callback`` — verifies ``state``, exchanges the code for
+   tokens, fetches the OpenID profile, upserts the :class:`User` row, persists
+   :class:`OAuthToken`, and finally puts ``user_id`` in the session cookie.
+3. ``GET /auth/me`` — returns the authenticated profile + linked channels.
+4. ``POST /auth/logout`` — clears the session cookie (no token revocation).
+"""
 from __future__ import annotations
 
 import datetime
@@ -23,6 +34,7 @@ _CODE_VERIFIER_KEY = "oauth_code_verifier"
 
 
 def _state_hint(value: str | None) -> str:
+    """Return a short, log-safe excerpt of an OAuth state token."""
     if not value:
         return "<none>"
     return f"{value[:8]}..."
@@ -181,5 +193,6 @@ async def auth_me(user: User = Depends(current_user)) -> dict:
 
 @router.post("/logout")
 async def logout(request: Request) -> Response:
+    """Clear the session cookie. Google tokens stay in the DB for next login."""
     request.session.clear()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

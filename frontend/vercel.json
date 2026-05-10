@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://wallet-calendar-bot-production.up.railway.app/api/:path*" },
+    { "source": "/auth/:path*", "destination": "https://wallet-calendar-bot-production.up.railway.app/auth/:path*" },
+    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+  ]
+}

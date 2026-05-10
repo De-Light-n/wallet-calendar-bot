@@ -4,16 +4,17 @@ This module is the *only* runnable for the project. Run it with:
 
     uvicorn app.main:app --reload --port 8000
 
-Everything starts inside this one process:
-- FastAPI HTTP server (frontend API + Slack webhook + Telegram webhook on prod)
-- Discord gateway client (persistent websocket, started as background task)
-- Telegram bot:
-    - Webhook mode if WEBHOOK_URL is set to a valid public HTTPS host
-    - Otherwise long-polling as a background task (dev / no public URL)
+Everything boots inside this one process:
 
-Earlier we split this into uvicorn + bot.py because Discord was being started
-in both places at once, causing duplicate event handling. Collapsing back to
-one process resolves the race naturally — there is only one client now.
+* FastAPI HTTP server — frontend API, OAuth callbacks, Slack/Discord/web
+  channel webhooks, and (in prod) the Telegram webhook receiver.
+* Discord gateway client — persistent websocket started as a background task.
+* Telegram bot — webhook mode when ``WEBHOOK_URL`` is a valid public HTTPS
+  host, otherwise long-polling as a background task (typical for dev).
+
+Why a single process: Discord previously ran in both ``uvicorn`` and a
+separate ``bot.py``, which produced duplicate event handling. Collapsing into
+one process eliminates that race — there is only one Discord client now.
 """
 from __future__ import annotations
 
@@ -101,6 +102,7 @@ _telegram_webhook_bot: Bot | None = None
 
 
 def _is_valid_telegram_token(token: str) -> bool:
+    """Quick syntactic check for ``<bot_id>:<secret>`` token shape."""
     return bool(token and _TELEGRAM_TOKEN_RE.match(token))
 
 
@@ -133,6 +135,7 @@ def _webhook_skip_reason() -> str | None:
 
 
 def _webhook_configured() -> bool:
+    """True when the current ``WEBHOOK_URL`` is acceptable to Telegram."""
     return _webhook_skip_reason() is None
 
 
@@ -251,8 +254,12 @@ async def on_startup() -> None:
 
 @app.post("/webhook/{token}")
 async def telegram_webhook(token: str, update: dict) -> dict:
-    # Token in the path doubles as a shared secret — Telegram is the only party
-    # that knows it, so reject anything that doesn't match the configured one.
+    """Receive a single Telegram update and feed it into the dispatcher.
+
+    The path token doubles as a shared secret. Telegram is the only party that
+    knows the bot token, so requests with a mismatched path token are rejected
+    silently with ``ok=False``.
+    """
     if token != TELEGRAM_TOKEN or _telegram_webhook_dispatcher is None or _telegram_webhook_bot is None:
         return {"ok": False}
     await _telegram_webhook_dispatcher.feed_webhook_update(

@@ -1,16 +1,16 @@
 import { Outlet } from 'react-router-dom'
-import { NavTabs } from '../components/NavTabs'
-import { UserHeader } from '../components/UserHeader'
+import { Sidebar } from '../components/Sidebar'
 import './AppLayout.css'
 
 export function AppLayout() {
   return (
-    <>
-      <UserHeader />
-      <NavTabs />
+    <div className="app-shell">
+      <Sidebar />
       <main className="app-main">
-        <Outlet />
+        <div className="app-main__inner">
+          <Outlet />
+        </div>
       </main>
-    </>
+    </div>
   )
 }

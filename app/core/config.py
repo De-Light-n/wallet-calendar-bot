@@ -1,4 +1,10 @@
-"""Centralized application configuration loaded from environment variables."""
+"""Centralized application configuration loaded from environment variables.
+
+A single :class:`AppSettings` instance (frozen, slots-only) is built once at
+import time and reused everywhere via ``settings``. The dataclass is the
+contract — every config knob must be declared here, with a default that makes
+the app boot in dev without a populated ``.env``.
+"""
 from __future__ import annotations
 
 import os
@@ -7,6 +13,7 @@ from functools import lru_cache
 
 
 def _parse_csv(value: str, *, default: list[str] | None = None) -> list[str]:
+    """Split a comma-separated env value into a trimmed list, falling back to ``default``."""
     if not value:
         return default or []
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -49,6 +56,7 @@ class AppSettings:
     finance_stub_mode: bool
 
     def is_channel_enabled(self, channel: str) -> bool:
+        """Whether ``channel`` is in the ``ENABLED_CHANNELS`` allow-list."""
         return channel in self.enabled_channels
 
 

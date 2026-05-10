@@ -1,4 +1,12 @@
-"""Webhook and API routes for multi-channel ingress."""
+"""Webhook and API routes for multi-channel ingress.
+
+Each channel exposes a single ``POST /api/channels/<channel>/...`` endpoint
+that receives the provider's payload, verifies authenticity, normalises it
+through the matching :class:`~app.channels.base.ChannelAdapter`, and either
+runs :func:`~app.agent.orchestrator.process_user_message` synchronously or
+schedules a background task that posts the reply back via the channel's
+outbound API.
+"""
 from __future__ import annotations
 
 import json
@@ -304,6 +312,13 @@ async def discord_webhook(
     db: Session = Depends(get_db),
     x_discord_token: str | None = Header(default=None),
 ) -> dict:
+    """Generic relay endpoint that accepts a Discord-shaped message payload.
+
+    This is independent of the persistent gateway client in
+    :mod:`app.channels.discord_bot`; it exists for forwarding from external
+    relays. Authenticated by the ``X-Discord-Token`` header when
+    ``DISCORD_WEBHOOK_SECRET`` is set.
+    """
     if not settings.is_channel_enabled("discord"):
         raise HTTPException(status_code=404, detail="Discord channel is disabled")
 
@@ -328,6 +343,11 @@ async def discord_webhook(
 
 @router.post("/webchat/message")
 async def webchat_message(payload: dict, db: Session = Depends(get_db)) -> dict:
+    """Anonymous web-chat ingress used by frontends without a session cookie.
+
+    Distinct from ``/api/me/chat`` (which is authenticated). Optional shared
+    ``api_key`` field gates the endpoint when ``WEBCHAT_API_KEY`` is set.
+    """
     if not settings.is_channel_enabled("web"):
         raise HTTPException(status_code=404, detail="Web chat channel is disabled")
 

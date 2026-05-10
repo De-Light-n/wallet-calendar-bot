@@ -9,6 +9,7 @@ interface LinkCodeResponse {
   expires_at: string
   channel: string
   bot_url: string | null
+  bot_name: string | null
   instructions: string
 }
 
@@ -43,10 +44,16 @@ export function ConnectSlack() {
         </p>
       ) : (
         <>
-          <p className="muted">
-            Установи Slack-додаток у свій workspace, потім згенеруй одноразовий
-            код і відправ його боту командою <code>/link</code>.
-          </p>
+          <ol className="howto">
+            <li>Установи бот у свій Slack workspace.</li>
+            <li>
+              Знайди бота у Slack: <em>головне меню → Apps → пошук</em>.
+            </li>
+            <li>
+              Відкрий DM з ботом (або згадай його <code>@bot</code> у каналі) і
+              надішли команду <code>/link &lt;код&gt;</code>.
+            </li>
+          </ol>
 
           {!code && (
             <button
@@ -61,19 +68,43 @@ export function ConnectSlack() {
           {code && (
             <div className="code-block">
               <div className="code-value">{code.code}</div>
-              <p className="muted">
-                {code.bot_url ? (
-                  <>
-                    Відкрий бота в Slack:{' '}
-                    <a href={code.bot_url} target="_blank" rel="noreferrer">
-                      Add to Slack
-                    </a>
-                  </>
-                ) : (
-                  'Відкрий DM з ботом у Slack'
-                )}{' '}
-                і напиши:
-              </p>
+
+              <ol className="howto">
+                <li>
+                  {code.bot_url ? (
+                    <>
+                      Установи бот у свій workspace:{' '}
+                      <a href={code.bot_url} target="_blank" rel="noreferrer">
+                        Add to Slack
+                      </a>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      Попроси адміна workspace додати бот{' '}
+                      {code.bot_name ? (
+                        <strong>{code.bot_name}</strong>
+                      ) : (
+                        'Wallet Calendar'
+                      )}
+                      .
+                    </>
+                  )}
+                </li>
+                <li>
+                  У Slack відкрий <em>Apps</em> →{' '}
+                  {code.bot_name ? (
+                    <>
+                      знайди <strong>{code.bot_name}</strong>
+                    </>
+                  ) : (
+                    'знайди бота за ім\'ям, яке вказав адмін'
+                  )}{' '}
+                  → відкрий DM.
+                </li>
+                <li>Надішли команду:</li>
+              </ol>
+
               <pre className="cmd">/link {code.code}</pre>
               <p className="muted small">
                 Код діє 10 хвилин. Після прив'язки оновіть сторінку.

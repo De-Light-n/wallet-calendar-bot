@@ -11,7 +11,8 @@
   overflow: hidden;
 }
 
-/* Subtle gradient halo — hints at the "agentic" feel without being noisy. */
+/* Two-tone halo — purple top-right, amber bottom-left. Hints at the "agentic"
+   feel and ties in the secondary accent without being noisy. */
 .chat-card::before {
   content: '';
   position: absolute;
@@ -21,6 +22,20 @@
   background: radial-gradient(
     closest-side,
     var(--accent-bg),
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+.chat-card::after {
+  content: '';
+  position: absolute;
+  inset: auto auto -30% -25%;
+  width: 320px;
+  height: 320px;
+  background: radial-gradient(
+    closest-side,
+    var(--accent-2-bg),
     transparent 70%
   );
   pointer-events: none;
